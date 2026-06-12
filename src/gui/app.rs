@@ -67,8 +67,8 @@ impl NeuralSimApp {
             last_output_count: 0,
             fps_tracker: MovingAverage::new(60),
             last_frame: Instant::now(),
-            stimulation_strength: 30.0,
-            noise_amplitude: 8.0,
+            stimulation_strength: 55.0,
+            noise_amplitude: 2.0,
             last_result: StepResult::default(),
             output_flash_counter: 0,
         }
