@@ -17,30 +17,35 @@ fn main() {
 fn cli_entry() {
     use neural_sim::network::Network;
     use neural_sim::simulation::SimulationEngine;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     println!("NeuralSim — Headless Mode");
     println!("=========================\n");
 
-    // Create a small test network
-    let mut network = Network::new(1000);
-
-    // Connect with Erdos-Renyi random graph (p=0.05)
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
+    let mut network = Network::new(5000);
     let mut rng = StdRng::seed_from_u64(42);
-    network.connect_random(0.05, &mut rng);
+    network.connect_random(0.03, &mut rng);
+
+    // Inject initial random currents to kickstart activity
+    for c in network.neurons.input_current.iter_mut() {
+        *c = rng.random::<f64>() * 12.0;
+    }
 
     println!("Neurons: {}", network.neuron_count());
     println!("Synapses: {}", network.synapse_count());
     println!();
 
-    // Run simulation
-    let mut engine = SimulationEngine::new(network);
-    engine.simulate_ms(100.0);
+    let mut engine = SimulationEngine::new(network).with_noise(8.0);
+    engine.simulate_ms(500.0);
 
     let stats = engine.stats();
     println!("Simulation complete:");
-    println!("  Time simulated: 100 ms");
+    println!("  Time simulated: {:.1} ms", stats.sim_time_ms);
     println!("  Total spikes: {}", stats.total_spikes);
-    println!("  Peak active neurons: {}", stats.active_neurons);
+    println!("  Peak active neurons per step: {}", stats.active_neurons);
+    if stats.total_spikes > 0 {
+        println!("  Avg firing rate: {:.1} Hz",
+            (stats.total_spikes as f64 / 5000.0) / (stats.sim_time_ms / 1000.0));
+    }
 }

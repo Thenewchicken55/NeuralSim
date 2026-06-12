@@ -7,7 +7,7 @@ authors = ["Elia <elia@example.com>"]
 
 [features]
 default = []
-gui = ["dep:egui", "dep:eframe", "dep:wgpu", "dep:pollster"]
+gui = ["dep:eframe"]
 
 [dependencies]
 rand = "0.9"
@@ -18,8 +18,5 @@ serde_json = "1"
 parking_lot = "0.12"
 thiserror = "2"
 
-# Optional GUI dependencies
-egui = { version = "0.34", optional = true }
-eframe = { version = "0.34", optional = true }
-wgpu = { version = "24", optional = true }
-pollster = { version = "0.4", optional = true }
+# Optional GUI
+eframe = { version = "0.34", optional = true, default-features = false, features = ["default_fonts", "glow"] }
