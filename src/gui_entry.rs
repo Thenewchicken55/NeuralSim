@@ -16,9 +16,10 @@ pub fn run() {
         network.neurons.is_output[i] = true;
     }
 
-    // Kickstart a burst of random activity
-    for c in network.neurons.input_current.iter_mut() {
-        *c = rng.random::<f64>() * 20.0;
+    // Small gentle nudge to a few neurons, not a flood
+    for _ in 0..20 {
+        let idx = rng.random_range(0..n);
+        network.neurons.input_current[idx] = 15.0;
     }
 
     let _ = NeuralSimApp::run(network);

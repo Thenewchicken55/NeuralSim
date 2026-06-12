@@ -8,7 +8,7 @@ use std::time::Instant;
 
 pub struct NeuralSimApp {
     engine: Arc<parking_lot::Mutex<SimulationEngine>>,
-    running: Arc<AtomicBool>,
+    _running: Arc<AtomicBool>,
     neuron_count: usize,
     grid_cols: usize,
     spike_history: Vec<f64>,
@@ -57,7 +57,7 @@ impl NeuralSimApp {
         Self {
             neuron_flash: vec![0u8; neuron_count],
             engine: Arc::new(parking_lot::Mutex::new(engine)),
-            running: Arc::new(AtomicBool::new(false)),
+            _running: Arc::new(AtomicBool::new(false)),
             neuron_count,
             grid_cols,
             spike_history: Vec::with_capacity(200),
