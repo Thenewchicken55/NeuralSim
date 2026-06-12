@@ -19,6 +19,7 @@ fn cli_entry() {
     use neural_sim::simulation::SimulationEngine;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
+    use std::time::Instant;
 
     println!("NeuralSim — Headless Mode");
     println!("=========================\n");
@@ -42,13 +43,28 @@ fn cli_entry() {
     println!("Neurons: {}", network.neuron_count());
     println!("Synapses: {}", network.synapse_count());
     println!("Output neurons: {}", network.neurons.is_output.iter().filter(|&&x| x).count());
-    println!();
 
     let mut engine = SimulationEngine::new(network).with_noise(10.0);
+
+    #[cfg(feature = "gpu")]
+    {
+        match engine.init_gpu() {
+            Ok(()) => println!("Backend: GPU (wgpu)"),
+            Err(e) => println!("Backend: CPU (GPU init failed: {e})"),
+        }
+    }
+    #[cfg(not(feature = "gpu"))]
+    println!("Backend: CPU (compile with --features gpu for GPU acceleration)");
+
+    println!();
+
+    let start = Instant::now();
     engine.simulate_ms(500.0);
+    let elapsed = start.elapsed();
 
     let stats = engine.stats();
-    println!("Simulation complete (500 ms):");
+    let steps = (500.0 / engine.dt) as u64;
+    println!("Simulation complete (500 ms simulated, {steps} steps, {:.2}s real):", elapsed.as_secs_f64());
     println!("  Total spikes: {}", stats.total_spikes);
     println!("  Output spikes: {}", stats.output_spikes);
     println!("  Peak active/step: {}", stats.active_neurons);
@@ -56,4 +72,6 @@ fn cli_entry() {
         println!("  Avg firing rate: {:.1} Hz",
             (stats.total_spikes as f64 / 5000.0) / (stats.sim_time_ms / 1000.0));
     }
+    println!("  Throughput: {:.0} neuron-steps/s",
+        (5000 * steps) as f64 / elapsed.as_secs_f64());
 }

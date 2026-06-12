@@ -51,9 +51,18 @@ impl MovingAverage {
 
 impl NeuralSimApp {
     pub fn new(network: Network) -> Self {
-        let neuron_count = network.neuron_count();
+        Self::from_engine(SimulationEngine::new(network))
+    }
+
+    /// Create the app from an already-constructed `SimulationEngine`.
+    /// This is used when the engine has optional features (like a GPU
+    /// backend) already attached.
+    pub fn from_engine(engine: SimulationEngine) -> Self {
+        let neuron_count = {
+            let net = engine.network.read();
+            net.neuron_count()
+        };
         let grid_cols = (neuron_count as f64).sqrt().ceil() as usize;
-        let engine = SimulationEngine::new(network);
         Self {
             neuron_flash: vec![0u8; neuron_count],
             engine: Arc::new(parking_lot::Mutex::new(engine)),
@@ -76,6 +85,19 @@ impl NeuralSimApp {
 
     pub fn run(network: Network) -> eframe::Result<()> {
         let app = Self::new(network);
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([1300.0, 900.0])
+                .with_title("NeuralSim"),
+            ..Default::default()
+        };
+        eframe::run_native("NeuralSim", options, Box::new(|_cc| Ok(Box::new(app))))
+    }
+
+    /// Like [`run`] but takes a pre-built `SimulationEngine` (e.g. one
+    /// with a GPU backend already attached).
+    pub fn run_with_engine(engine: SimulationEngine) -> eframe::Result<()> {
+        let app = Self::from_engine(engine);
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1300.0, 900.0])
