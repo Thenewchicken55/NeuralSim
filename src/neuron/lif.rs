@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn test_lif_fires_at_threshold() {
         let mut state = NeuronState::new(NeuronType::Excitatory, NeuronModelParams::default());
-        state.membrane_potential = -54.0;
+        state.membrane_potential = -49.0;
         let mut neuron = LifNeuron;
         let spiked = neuron.step(&mut state, 0.1, 0.0);
         assert!(spiked);
@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn test_lif_refractory_period() {
         let mut state = NeuronState::new(NeuronType::Excitatory, NeuronModelParams::default());
-        state.membrane_potential = -54.0;
+        state.membrane_potential = -49.0;
         let mut neuron = LifNeuron;
         let first = neuron.step(&mut state, 0.1, 0.0);
         assert!(first);

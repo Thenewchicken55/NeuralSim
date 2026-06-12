@@ -1,4 +1,4 @@
 pub mod engine;
 pub mod scheduler;
 
-pub use engine::SimulationEngine;
+pub use engine::{SimulationEngine, SimulationStats, StepResult};

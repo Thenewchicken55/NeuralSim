@@ -90,12 +90,12 @@ impl NeuronModelParams {
 impl Default for NeuronModelParams {
     fn default() -> Self {
         Self::Lif {
-            resting: -65.0,
-            threshold: -55.0,
-            reset: -70.0,
-            tau_m: 10.0,
-            refractory_period: 2.0,
-            input_resistance: 1.0,
+            resting: -60.0,
+            threshold: -50.0,
+            reset: -65.0,
+            tau_m: 8.0,
+            refractory_period: 1.5,
+            input_resistance: 2.0,
         }
     }
 }
@@ -117,6 +117,7 @@ pub struct NeuronArray {
     pub neuron_type: Vec<NeuronType>,
     pub model_params: Vec<NeuronModelParams>,
     pub input_current: Vec<f64>,
+    pub is_output: Vec<bool>,
 }
 
 impl NeuronArray {
@@ -131,6 +132,7 @@ impl NeuronArray {
             neuron_type: vec![NeuronType::Excitatory; size],
             model_params: vec![default_params; size],
             input_current: vec![0.0; size],
+            is_output: vec![false; size],
         }
     }
 

@@ -12,9 +12,17 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SimulationStats {
     pub total_spikes: u64,
+    pub output_spikes: u64,
     pub active_neurons: u64,
-    pub mean_firing_rate: f64,
     pub sim_time_ms: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StepResult {
+    pub spike_count: u64,
+    pub output_spike_count: u64,
+    pub spiking_neurons: Vec<usize>,
+    pub output_spiking_neurons: Vec<usize>,
 }
 
 pub struct SimulationEngine {
@@ -23,7 +31,10 @@ pub struct SimulationEngine {
     pub spike_buffer: Vec<(usize, f64)>,
     pub stats: Arc<RwLock<SimulationStats>>,
     rng: StdRng,
-    noise_amplitude: f64,
+    pub noise_amplitude: f64,
+    noise_density: f64,
+    external_stimulus_chance: f64,
+    external_stimulus_strength: f64,
 }
 
 impl SimulationEngine {
@@ -31,10 +42,13 @@ impl SimulationEngine {
         Self {
             network: Arc::new(RwLock::new(network)),
             dt: 0.5,
-            spike_buffer: Vec::with_capacity(1024),
+            spike_buffer: Vec::with_capacity(4096),
             stats: Arc::new(RwLock::new(SimulationStats::default())),
             rng: StdRng::seed_from_u64(42),
-            noise_amplitude: 5.0,
+            noise_amplitude: 8.0,
+            noise_density: 0.3,
+            external_stimulus_chance: 0.01,
+            external_stimulus_strength: 20.0,
         }
     }
 
@@ -43,20 +57,40 @@ impl SimulationEngine {
         self
     }
 
-    pub fn step(&mut self) {
-        let spike_count = Arc::new(AtomicU64::new(0));
-        let dt = self.dt;
-        let noise_amp = self.noise_amplitude;
+    /// Inject current into a specific neuron (call from GUI)
+    pub fn stimulate(&mut self, neuron_id: usize, current: f64) {
+        let mut net = self.network.write();
+        if neuron_id < net.neurons.len() {
+            net.neurons.input_current[neuron_id] += current;
+        }
+    }
 
-        // Phase 1: Update all neurons in parallel
+    pub fn step(&mut self) -> StepResult {
+        let spike_count = Arc::new(AtomicU64::new(0));
+        let output_spike_count = Arc::new(AtomicU64::new(0));
+        let dt = self.dt;
+
+        let mut local_spiking = Vec::new();
+        let mut local_output_spiking = Vec::new();
+
+        // Phase 1: Update neurons
         {
             let mut net = self.network.write();
             let n = net.neuron_count();
 
-            // Inject background noise to random neurons
+            // Inject background noise
             for i in 0..n {
-                if self.rng.random::<f64>() < 0.2 {
-                    net.neurons.input_current[i] += self.rng.random::<f64>() * noise_amp;
+                if self.rng.random::<f64>() < self.noise_density {
+                    net.neurons.input_current[i] += self.rng.random::<f64>() * self.noise_amplitude;
+                }
+            }
+
+            // Random external stimulus events (like sensory input)
+            if self.rng.random::<f64>() < self.external_stimulus_chance {
+                let count = self.rng.random_range(5..=30);
+                for _ in 0..count {
+                    let target = self.rng.random_range(0..n);
+                    net.neurons.input_current[target] += self.rng.random::<f64>() * self.external_stimulus_strength;
                 }
             }
 
@@ -73,6 +107,7 @@ impl SimulationEngine {
                 .collect();
 
             let input_currents: Vec<f64> = net.neurons.input_current.clone();
+            let is_output: Vec<bool> = net.neurons.is_output.clone();
             let spikes: Vec<bool> = states
                 .par_iter_mut()
                 .enumerate()
@@ -81,6 +116,9 @@ impl SimulationEngine {
                     let spiked = lif.step(state, dt, input_currents[i]);
                     if spiked {
                         spike_count.fetch_add(1, Ordering::Relaxed);
+                        if is_output[i] {
+                            output_spike_count.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                     spiked
                 })
@@ -98,11 +136,15 @@ impl SimulationEngine {
             for (i, spiked) in spikes.iter().enumerate() {
                 if *spiked {
                     self.spike_buffer.push((i, net.time));
+                    local_spiking.push(i);
+                    if is_output[i] {
+                        local_output_spiking.push(i);
+                    }
                 }
             }
         }
 
-        // Phase 2: Propagate spikes
+        // Phase 2: Propagate spikes through synapses
         {
             let mut net = self.network.write();
             for &(neuron_id, _time) in self.spike_buffer.iter() {
@@ -124,18 +166,28 @@ impl SimulationEngine {
             let mut net = self.network.write();
             net.time += dt;
             sim_time = net.time;
+            // Slower decay so activity reverberates longer
             for c in net.neurons.input_current.iter_mut() {
-                *c *= 0.8;
+                *c *= 0.92;
             }
         }
 
-        // Phase 4: Update stats
+        // Phase 4: Stats
         {
             let mut stats = self.stats.write();
             let spiked = spike_count.load(Ordering::Relaxed);
+            let output = output_spike_count.load(Ordering::Relaxed);
             stats.total_spikes += spiked;
+            stats.output_spikes += output;
             stats.active_neurons = stats.active_neurons.max(spiked);
             stats.sim_time_ms = sim_time;
+        }
+
+        StepResult {
+            spike_count: spike_count.load(Ordering::Relaxed),
+            output_spike_count: output_spike_count.load(Ordering::Relaxed),
+            spiking_neurons: local_spiking,
+            output_spiking_neurons: local_output_spiking,
         }
     }
 
