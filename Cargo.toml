@@ -3,7 +3,7 @@ name = "neural_sim"
 version = "0.1.0"
 edition = "2024"
 description = "A biologically realistic spiking neural network simulator for massive scale"
-authors = ["Elia <elia@example.com>"]
+authors = ["Elia"]
 license = "MIT OR Apache-2.0"
 
 [features]

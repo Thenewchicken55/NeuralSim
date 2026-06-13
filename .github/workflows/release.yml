@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Build (all features)
+        run: cargo build --release --features "gpu,gui"
+
+      - name: Prepare artifact (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp target/release/neural_sim dist/neural_sim-${{ runner.os }}
+
+      - name: Prepare artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir dist -Force
+          cp target/release/neural_sim.exe dist/neural_sim-Windows.exe
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

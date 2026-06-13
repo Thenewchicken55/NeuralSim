@@ -63,7 +63,14 @@ NeuralSim is a high-performance, massively scalable simulator for spiking neural
 - Basal ganglia circuit
 - Custom user-defined regions via JSON config
 
-## Getting Started
+## Installation
+
+### Pre-built binaries (recommended)
+
+Download the latest binary for your platform from the
+[Releases](https://github.com/Thenewchicken55/NeuralSim/releases) page.
+
+### Build from source
 
 ```bash
 # Clone and build
@@ -71,11 +78,14 @@ git clone https://github.com/Thenewchicken55/NeuralSim.git
 cd NeuralSim
 cargo build --release
 
-# Run with GUI
-cargo run --release --features gui
-
-# Run headless (CLI only)
+# Run headless
 cargo run --release
+
+# Run with GPU acceleration
+cargo run --release --features gpu
+
+# Run with GUI + GPU
+cargo run --release --features "gpu,gui"
 ```
 
 ### Quick Example
@@ -152,4 +162,4 @@ NeuralSim is inspired by:
 
 ## License
 
-MIT
+Dual-licensed under [MIT](LICENSE-MIT) OR [Apache 2.0](LICENSE-APACHE).
