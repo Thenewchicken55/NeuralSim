@@ -3,17 +3,14 @@ mod gui_entry;
 
 fn main() {
     #[cfg(feature = "gui")]
-    {
+    if !std::env::args().any(|a| a == "--cli") {
         gui_entry::run();
+        return;
     }
 
-    #[cfg(not(feature = "gui"))]
-    {
-        cli_demo();
-    }
+    cli_demo();
 }
 
-#[cfg(not(feature = "gui"))]
 fn cli_demo() {
     use neural_sim::network::builder::BrainBuilder;
     use neural_sim::simulation::SimulationEngine;
@@ -160,7 +157,7 @@ fn cli_demo() {
     println!();
     println!("╔══════════════════════════════════════════════════╗");
     println!("║  Simulation complete.                           ║");
-    println!("║  Run with --features gui for real-time viz.     ║");
+    println!("║  Run with --cli for terminal mode.              ║");
     println!("║  Run with --features gpu for GPU acceleration.  ║");
     println!("╚══════════════════════════════════════════════════╝");
 }

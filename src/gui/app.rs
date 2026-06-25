@@ -30,10 +30,12 @@ pub struct NeuralSimApp {
     show_raster: bool,
     show_lfp: bool,
     show_weights: bool,
+    #[allow(dead_code)]
     show_fr_histogram: bool,
     show_region_stats: bool,
     use_conductance: bool,
     // Recording stats
+    #[allow(dead_code)]
     running_since: Instant,
 }
 

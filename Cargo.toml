@@ -7,7 +7,7 @@ authors = ["Elia"]
 license = "MIT OR Apache-2.0"
 
 [features]
-default = []
+default = ["gui"]
 gui = ["dep:eframe"]
 gpu = ["dep:wgpu", "dep:pollster"]
 
