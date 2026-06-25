@@ -13,19 +13,28 @@ pub struct NeuralSimApp {
     grid_cols: usize,
     spike_history: Vec<f64>,
     output_history: Vec<f64>,
+    lfp_history: Vec<f64>,
+    firing_rate_history: Vec<f64>,
+    weight_mean_history: Vec<f64>,
     history_max: usize,
     last_spike_count: u64,
     last_output_count: u64,
     fps_tracker: MovingAverage,
     last_frame: Instant,
-    // Interactive stimulation
     stimulation_strength: f64,
     noise_amplitude: f64,
-    // Last step result for GUI animation
     last_result: StepResult,
-    // Flash state for firing neurons (frames remaining)
     neuron_flash: Vec<u8>,
     output_flash_counter: u32,
+    // View settings
+    show_raster: bool,
+    show_lfp: bool,
+    show_weights: bool,
+    show_fr_histogram: bool,
+    show_region_stats: bool,
+    use_conductance: bool,
+    // Recording stats
+    running_since: Instant,
 }
 
 struct MovingAverage {
@@ -54,9 +63,6 @@ impl NeuralSimApp {
         Self::from_engine(SimulationEngine::new(network))
     }
 
-    /// Create the app from an already-constructed `SimulationEngine`.
-    /// This is used when the engine has optional features (like a GPU
-    /// backend) already attached.
     pub fn from_engine(engine: SimulationEngine) -> Self {
         let neuron_count = {
             let net = engine.network.read();
@@ -71,6 +77,9 @@ impl NeuralSimApp {
             grid_cols,
             spike_history: Vec::with_capacity(200),
             output_history: Vec::with_capacity(200),
+            lfp_history: Vec::with_capacity(200),
+            firing_rate_history: Vec::with_capacity(200),
+            weight_mean_history: Vec::with_capacity(200),
             history_max: 200,
             last_spike_count: 0,
             last_output_count: 0,
@@ -80,6 +89,13 @@ impl NeuralSimApp {
             noise_amplitude: 2.0,
             last_result: StepResult::default(),
             output_flash_counter: 0,
+            show_raster: true,
+            show_lfp: true,
+            show_weights: true,
+            show_fr_histogram: true,
+            show_region_stats: true,
+            use_conductance: true,
+            running_since: Instant::now(),
         }
     }
 
@@ -87,40 +103,44 @@ impl NeuralSimApp {
         let app = Self::new(network);
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1300.0, 900.0])
+                .with_inner_size([1400.0, 900.0])
                 .with_title("NeuralSim"),
             ..Default::default()
         };
         eframe::run_native("NeuralSim", options, Box::new(|_cc| Ok(Box::new(app))))
     }
 
-    /// Like [`run`] but takes a pre-built `SimulationEngine` (e.g. one
-    /// with a GPU backend already attached).
     pub fn run_with_engine(engine: SimulationEngine) -> eframe::Result<()> {
         let app = Self::from_engine(engine);
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1300.0, 900.0])
+                .with_inner_size([1400.0, 900.0])
                 .with_title("NeuralSim"),
             ..Default::default()
         };
         eframe::run_native("NeuralSim", options, Box::new(|_cc| Ok(Box::new(app))))
     }
 
-    /// Get a color for a neuron based on its membrane potential and flash state
-    fn neuron_color(membrane_v: f64, flash: u8, is_output: bool) -> egui::Color32 {
+    fn neuron_color(membrane_v: f64, flash: u8, is_output: bool, region_id: usize) -> egui::Color32 {
         if flash > 0 {
             return egui::Color32::WHITE;
         }
+        // Region-based color baseline
+        let region_hue = (region_id as f32 * 0.15) % 1.0;
         let normalized = ((membrane_v + 70.0) / 35.0).clamp(0.0, 1.0) as f32;
-        let r = (normalized * 255.0) as u8;
-        let g = (normalized * 80.0) as u8;
-        let b = (255.0 - normalized * 200.0) as u8;
+        let _brightness = (normalized * 0.5 + 0.3).min(1.0);
+        let r = (region_hue.sin() * 127.0 + 128.0) as u8;
+        let g = ((region_hue + 0.33).sin() * 127.0 + 128.0) as u8;
+        let b = ((region_hue + 0.67).sin() * 127.0 + 128.0) as u8;
+        // Blend with activity
+        let mix = normalized;
+        let fr = (r as f32 * (1.0 - mix) + 255.0 * mix) as u8;
+        let fg = (g as f32 * (1.0 - mix) + 80.0 * mix) as u8;
+        let fb = (b as f32 * (1.0 - mix) + 0.0 * mix) as u8;
         if is_output {
-            // Slightly brighter / green-tinted for output neurons
-            egui::Color32::from_rgb(r, (g + 80).min(255), b)
+            egui::Color32::from_rgb(fr, (fg + 80).min(255), fb)
         } else {
-            egui::Color32::from_rgb(r, g, b)
+            egui::Color32::from_rgb(fr, fg, fb)
         }
     }
 }
@@ -131,16 +151,14 @@ impl eframe::App for NeuralSimApp {
         let frame_dt = frame_start.duration_since(self.last_frame).as_secs_f64();
         self.last_frame = frame_start;
 
-        // Run simulation steps proportional to real time
         let steps = ((frame_dt * 1000.0 / 0.5) as usize).max(1).min(20);
         let mut total_result = StepResult::default();
         {
             let mut eng = self.engine.lock();
-            // Apply noise setting to engine
             eng.noise_amplitude = self.noise_amplitude;
+            eng.use_conductance = self.use_conductance;
             for _ in 0..steps {
                 let result = eng.step();
-                // Track spiking neurons for flash effect
                 for &n in &result.spiking_neurons {
                     self.neuron_flash[n] = 4;
                 }
@@ -151,7 +169,6 @@ impl eframe::App for NeuralSimApp {
             }
         }
 
-        // Decay flash counters
         for f in self.neuron_flash.iter_mut() {
             *f = f.saturating_sub(1);
         }
@@ -168,15 +185,26 @@ impl eframe::App for NeuralSimApp {
             eng.stats()
         };
 
+        let lfp = {
+            let eng = self.engine.lock();
+            eng.lfp()
+        };
+
         let new_spikes = stats.total_spikes - self.last_spike_count;
         let new_output = stats.output_spikes - self.last_output_count;
         self.last_spike_count = stats.total_spikes;
         self.last_output_count = stats.output_spikes;
         self.spike_history.push(new_spikes as f64);
         self.output_history.push(new_output as f64);
+        self.lfp_history.push(lfp);
+        self.firing_rate_history.push(stats.mean_firing_rate);
+        self.weight_mean_history.push(stats.weight_mean);
         if self.spike_history.len() > self.history_max {
             self.spike_history.remove(0);
             self.output_history.remove(0);
+            self.lfp_history.remove(0);
+            self.firing_rate_history.remove(0);
+            self.weight_mean_history.remove(0);
         }
 
         let fps = 1.0 / frame_start.elapsed().as_secs_f64().max(1e-6);
@@ -194,6 +222,9 @@ impl eframe::App for NeuralSimApp {
                     self.last_output_count = 0;
                     self.spike_history.clear();
                     self.output_history.clear();
+                    self.lfp_history.clear();
+                    self.firing_rate_history.clear();
+                    self.weight_mean_history.clear();
                     self.neuron_flash.fill(0);
                 }
                 if ui.button("Burst").clicked() {
@@ -211,10 +242,15 @@ impl eframe::App for NeuralSimApp {
                 if self.output_flash_counter > 0 {
                     ui.colored_label(egui::Color32::YELLOW, format!("⚡ OUTPUT! x{}", new_output));
                 }
+                ui.separator();
+                ui.checkbox(&mut self.show_raster, "Raster");
+                ui.checkbox(&mut self.show_lfp, "LFP");
+                ui.checkbox(&mut self.show_weights, "Weights");
+                ui.checkbox(&mut self.use_conductance, "Cond");
             });
         });
 
-        // ── Central panel with left stats + right network ──
+        // ── Central panel ──
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.columns(2, |cols| {
                 // ── LEFT COLUMN: Controls + Stats ──
@@ -246,7 +282,7 @@ impl eframe::App for NeuralSimApp {
                         ui.label(format!("Time: {:.1} ms", stats.sim_time_ms));
                         ui.label(format!("Total spikes: {}", stats.total_spikes));
                         ui.label(format!("Output spikes: {}", stats.output_spikes));
-                        ui.label(format!("Spikes this frame: {}", self.last_result.spike_count));
+                        ui.label(format!("Spikes/frame: {}", self.last_result.spike_count));
                         let rate = {
                             let eng = self.engine.lock();
                             let n = eng.network.read().neuron_count() as f64;
@@ -255,57 +291,46 @@ impl eframe::App for NeuralSimApp {
                             } else { 0.0 }
                         };
                         ui.label(format!("Avg rate: {:.1} Hz", rate));
+                        ui.label(format!("Mean FR: {:.1} Hz", stats.mean_firing_rate));
+                        ui.label(format!("Synch: {:.3}", stats.synchrony_index));
+                        ui.label(format!("LFP: {:.2}", lfp));
+                        ui.label(format!("Weight μ={:.3} σ={:.3}", stats.weight_mean, stats.weight_std));
+                        ui.label(format!("Updates: {}", stats.weight_updates));
                     });
+
+                    // Region stats
+                    if self.show_region_stats {
+                        ui.group(|ui| {
+                            ui.label("Region Activity");
+                            ui.separator();
+                            let eng = self.engine.lock();
+                            let net = eng.network.read();
+                            for (name, count, spike_c) in net.region_counts() {
+                                let t = net.time.max(0.001);
+                                let rate = if count > 0 {
+                                    spike_c as f64 / count as f64 / (t / 1000.0)
+                                } else { 0.0 };
+                                ui.label(format!("{}: {} nrn, {:.1} Hz", name, count, rate));
+                            }
+                        });
+                    }
 
                     // Spike rate graph
-                    ui.group(|ui| {
-                        ui.label("Spike Rate");
-                        ui.separator();
-                        let graph_h = 100.0;
-                        let (response, painter) = ui.allocate_painter(
-                            egui::Vec2::new(ui.available_width(), graph_h),
-                            egui::Sense::hover(),
-                        );
-                        if self.spike_history.len() >= 2 {
-                            let rect = response.rect;
-                            let max_val = self.spike_history.iter().cloned().fold(0.0f64, f64::max).max(1.0);
-                            let w = rect.width(); let h = rect.height();
+                    if self.show_raster {
+                        self.draw_graph(ui, "Spike Rate", &self.spike_history, egui::Color32::LIGHT_BLUE, 80.0);
+                        self.draw_graph(ui, "Output Rate", &self.output_history, egui::Color32::YELLOW, 50.0);
+                    }
 
-                            let points: Vec<egui::Pos2> = self.spike_history.iter().enumerate().map(|(i, v)| {
-                                let x = rect.left() + (i as f32 / (self.spike_history.len() - 1) as f32) * w;
-                                let y = rect.bottom() - (*v as f32 / max_val as f32) * h;
-                                egui::Pos2::new(x, y)
-                            }).collect();
-                            if points.len() > 1 {
-                                painter.add(egui::Shape::line(points, egui::Stroke::new(2.0, egui::Color32::LIGHT_BLUE)));
-                            }
-                        }
-                    });
+                    // LFP graph
+                    if self.show_lfp {
+                        self.draw_graph(ui, "LFP", &self.lfp_history, egui::Color32::RED, 50.0);
+                        self.draw_graph(ui, "Mean FR", &self.firing_rate_history, egui::Color32::GREEN, 50.0);
+                    }
 
-                    // Output rate graph
-                    ui.group(|ui| {
-                        ui.label("Output Firing Rate");
-                        ui.separator();
-                        let graph_h = 60.0;
-                        let (response, painter) = ui.allocate_painter(
-                            egui::Vec2::new(ui.available_width(), graph_h),
-                            egui::Sense::hover(),
-                        );
-                        if self.output_history.len() >= 2 {
-                            let rect = response.rect;
-                            let max_val = self.output_history.iter().cloned().fold(0.0f64, f64::max).max(1.0);
-                            let w = rect.width(); let h = rect.height();
-
-                            let points: Vec<egui::Pos2> = self.output_history.iter().enumerate().map(|(i, v)| {
-                                let x = rect.left() + (i as f32 / (self.output_history.len() - 1) as f32) * w;
-                                let y = rect.bottom() - (*v as f32 / max_val as f32) * h;
-                                egui::Pos2::new(x, y)
-                            }).collect();
-                            if points.len() > 1 {
-                                painter.add(egui::Shape::line(points, egui::Stroke::new(2.0, egui::Color32::YELLOW)));
-                            }
-                        }
-                    });
+                    // Weight distribution
+                    if self.show_weights {
+                        self.draw_graph(ui, "Weight Mean", &self.weight_mean_history, egui::Color32::MAGENTA, 40.0);
+                    }
                 });
 
                 // ── RIGHT COLUMN: Network grid ──
@@ -314,7 +339,7 @@ impl eframe::App for NeuralSimApp {
                         ui.label("Neural Network — click to stimulate");
                         ui.separator();
 
-                        // Handle click to stimulate (separate block to drop locks before drawing)
+                        // Handle click
                         {
                             let eng = self.engine.lock();
                             let net = eng.network.read();
@@ -323,7 +348,6 @@ impl eframe::App for NeuralSimApp {
                                 egui::Vec2::new(ui.available_width(), 1.0),
                                 egui::Sense::click(),
                             );
-                            let _ = response.rect;
 
                             if let Some(click_pos) = response.interact_pointer_pos() {
                                 if response.clicked() {
@@ -344,7 +368,6 @@ impl eframe::App for NeuralSimApp {
                             }
                         }
 
-                        // Now read and draw
                         let eng = self.engine.lock();
                         let net = eng.network.read();
                         let n = net.neuron_count();
@@ -373,7 +396,8 @@ impl eframe::App for NeuralSimApp {
                             let v = net.neurons.membrane_potential[i];
                             let flash = self.neuron_flash[i];
                             let is_output = net.neurons.is_output[i];
-                            let base_color = Self::neuron_color(v, flash, is_output);
+                            let region_id = if i < net.neuron_region.len() { net.neuron_region[i] } else { 0 };
+                            let base_color = Self::neuron_color(v, flash, is_output, region_id);
 
                             let pos = to_screen * egui::Pos2::new(x + 0.5, y + 0.5);
                             let radius = cell_size * 0.4;
@@ -389,5 +413,41 @@ impl eframe::App for NeuralSimApp {
         });
 
         ui.ctx().request_repaint();
+    }
+}
+
+// Helper: draw a line graph
+impl NeuralSimApp {
+    fn draw_graph(&self, ui: &mut egui::Ui, label: &str, data: &[f64], color: egui::Color32, height: f32) {
+        ui.group(|ui| {
+            ui.label(label);
+            ui.separator();
+            let (response, painter) = ui.allocate_painter(
+                egui::Vec2::new(ui.available_width(), height),
+                egui::Sense::hover(),
+            );
+            if data.len() >= 2 {
+                let rect = response.rect;
+                let max_val = data.iter().cloned().fold(0.0f64, f64::max).max(1.0);
+                let w = rect.width(); let h = rect.height();
+
+                let points: Vec<egui::Pos2> = data.iter().enumerate().map(|(i, v)| {
+                    let x = rect.left() + (i as f32 / (data.len() - 1) as f32) * w;
+                    let y = rect.bottom() - (*v as f32 / max_val as f32) * h;
+                    egui::Pos2::new(x, y)
+                }).collect();
+                if points.len() > 1 {
+                    painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, color)));
+                }
+                // Show current value
+                if let Some(&last) = data.last() {
+                    let text = format!("{:.2}", last);
+                    painter.text(egui::Pos2::new(rect.right() - 40.0, rect.top() + 10.0),
+                                 egui::Align2::RIGHT_TOP, text,
+                                 egui::TextStyle::Monospace.resolve(ui.style()),
+                                 color);
+                }
+            }
+        });
     }
 }

@@ -1,8 +1,18 @@
 use std::borrow::Cow;
 
 const LIF_SHADER_SOURCE: &str = include_str!("shaders/lif_update.wgsl");
+const IZHIKEVICH_SHADER_SOURCE: &str = include_str!("shaders/izhikevich_update.wgsl");
+const HH_SHADER_SOURCE: &str = include_str!("shaders/hh_update.wgsl");
 const SPMV_SHADER_SOURCE: &str = include_str!("shaders/spmv.wgsl");
 const SPMV_CONVERT_SHADER_SOURCE: &str = include_str!("shaders/spmv_convert.wgsl");
+
+/// Which neuron model the GPU backend should use for stepping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuModel {
+    Lif,
+    Izhikevich,
+    HodgkinHuxley,
+}
 
 #[derive(Debug)]
 pub enum GpuError {
@@ -60,8 +70,12 @@ pub struct GpuBackend {
 
     // ── Pipelines ──
     lif_pipeline: wgpu::ComputePipeline,
+    izhikevich_pipeline: wgpu::ComputePipeline,
+    hh_pipeline: wgpu::ComputePipeline,
     spmv_pipeline: wgpu::ComputePipeline,
     convert_pipeline: wgpu::ComputePipeline,
+    /// Which model is currently loaded on GPU
+    active_model: GpuModel,
 
     // ── Staging buffers for readback ──
     staging_buf: wgpu::Buffer,         // LIF readback (spiked + state)
@@ -251,6 +265,14 @@ impl GpuBackend {
             label: Some("lif_update"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(LIF_SHADER_SOURCE)),
         });
+        let izhikevich_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("izhikevich_update"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(IZHIKEVICH_SHADER_SOURCE)),
+        });
+        let hh_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hh_update"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(HH_SHADER_SOURCE)),
+        });
         let spmv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("spmv"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SPMV_SHADER_SOURCE)),
@@ -265,6 +287,25 @@ impl GpuBackend {
             label: Some("lif_pipeline"),
             layout: Some(&lif_pipeline_layout),
             module: &lif_shader,
+            entry_point: "main",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let izhikevich_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("izhikevich_pipeline"),
+            layout: Some(&lif_pipeline_layout),
+            module: &izhikevich_shader,
+            entry_point: "main",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        // HH pipeline uses 12 bindings (extra gate buffers) — requires separate layout.
+        // For now we reuse the same layout but the shader will only be used with
+        // additional buffer support added at runtime.
+        let hh_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("hh_pipeline"),
+            layout: Some(&lif_pipeline_layout),
+            module: &hh_shader,
             entry_point: "main",
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
@@ -353,7 +394,9 @@ impl GpuBackend {
             atomic_current_buf,
             uniform_buf,
             lif_bind_group, uniform_bind_group, spmv_bind_group, convert_bind_group,
-            lif_pipeline, spmv_pipeline, convert_pipeline,
+            lif_pipeline, izhikevich_pipeline, hh_pipeline,
+            spmv_pipeline, convert_pipeline,
+            active_model: GpuModel::Lif,
             staging_buf, staging_spiked_offset, staging_state_offset, staging_size,
             staging_current_buf, staging_current_size,
         })
@@ -407,7 +450,120 @@ impl GpuBackend {
 
     // ── Simulation steps ──
 
-    /// Run the LIF compute shader.  Returns spiked flags and updated state.
+    /// Switch the active neuron model for the GPU backend.
+    pub fn set_model(&mut self, model: GpuModel) {
+        self.active_model = model;
+    }
+
+    /// Run the neuron compute shader for the active model.
+    /// Returns (spiked, membrane_potential, recovery_variable, refractory_counter, spike_count).
+    pub fn step_neurons(
+        &mut self,
+    ) -> (
+        Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>,
+    ) {
+        match self.active_model {
+            GpuModel::Lif => self.dispatch_lif(),
+            GpuModel::Izhikevich => self.dispatch_izhikevich(),
+            GpuModel::HodgkinHuxley => self.dispatch_hh(),
+        }
+    }
+
+    fn dispatch_pipeline(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipeline: &wgpu::ComputePipeline,
+        lif_bind_group: &wgpu::BindGroup,
+        uniform_bind_group: &wgpu::BindGroup,
+        spiked_buf: &wgpu::Buffer,
+        membrane_potential_buf: &wgpu::Buffer,
+        recovery_variable_buf: &wgpu::Buffer,
+        refractory_counter_buf: &wgpu::Buffer,
+        spike_count_buf: &wgpu::Buffer,
+        staging_buf: &wgpu::Buffer,
+        staging_size: u64,
+        staging_spiked_offset: u64,
+        staging_state_offset: u64,
+        num_workgroups_neurons: u32,
+        num_neurons: usize,
+    ) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
+        let n = num_neurons;
+        let n_bytes = (n as u64) * 4;
+
+        let mut encoder = device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("neuron_encoder"),
+            });
+
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("neuron_pass"),
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(pipeline);
+            cpass.set_bind_group(0, lif_bind_group, &[]);
+            cpass.set_bind_group(1, uniform_bind_group, &[]);
+            cpass.dispatch_workgroups(num_workgroups_neurons, 1, 1);
+        }
+
+        encoder.copy_buffer_to_buffer(spiked_buf, 0, staging_buf, staging_spiked_offset, n_bytes);
+        encoder.copy_buffer_to_buffer(membrane_potential_buf, 0, staging_buf, staging_state_offset, n_bytes);
+        encoder.copy_buffer_to_buffer(recovery_variable_buf, 0, staging_buf, staging_state_offset + n_bytes, n_bytes);
+        encoder.copy_buffer_to_buffer(refractory_counter_buf, 0, staging_buf, staging_state_offset + n_bytes * 2, n_bytes);
+        encoder.copy_buffer_to_buffer(spike_count_buf, 0, staging_buf, staging_state_offset + n_bytes * 3, n_bytes);
+
+        queue.submit(Some(encoder.finish()));
+        Self::map_readback_impl(device, staging_buf, staging_size, staging_spiked_offset, staging_state_offset, n)
+    }
+
+    fn dispatch_lif(
+        &mut self,
+    ) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
+        Self::dispatch_pipeline(
+            &self.device, &self.queue, &self.lif_pipeline,
+            &self.lif_bind_group, &self.uniform_bind_group,
+            &self.spiked_buf, &self.membrane_potential_buf,
+            &self.recovery_variable_buf, &self.refractory_counter_buf,
+            &self.spike_count_buf, &self.staging_buf,
+            self.staging_size,
+            self.staging_spiked_offset, self.staging_state_offset,
+            self.num_workgroups_neurons, self.num_neurons,
+        )
+    }
+
+    fn dispatch_izhikevich(
+        &mut self,
+    ) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
+        Self::dispatch_pipeline(
+            &self.device, &self.queue, &self.izhikevich_pipeline,
+            &self.lif_bind_group, &self.uniform_bind_group,
+            &self.spiked_buf, &self.membrane_potential_buf,
+            &self.recovery_variable_buf, &self.refractory_counter_buf,
+            &self.spike_count_buf, &self.staging_buf,
+            self.staging_size,
+            self.staging_spiked_offset, self.staging_state_offset,
+            self.num_workgroups_neurons, self.num_neurons,
+        )
+    }
+
+    fn dispatch_hh(
+        &mut self,
+    ) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
+        // HH pipeline also needs gate buffers uploaded — for now fall back to LIF dispatch
+        eprintln!("Warning: HH GPU shader requires gate buffers not yet allocated; falling back to LIF");
+        Self::dispatch_pipeline(
+            &self.device, &self.queue, &self.lif_pipeline,
+            &self.lif_bind_group, &self.uniform_bind_group,
+            &self.spiked_buf, &self.membrane_potential_buf,
+            &self.recovery_variable_buf, &self.refractory_counter_buf,
+            &self.spike_count_buf, &self.staging_buf,
+            self.staging_size,
+            self.staging_spiked_offset, self.staging_state_offset,
+            self.num_workgroups_neurons, self.num_neurons,
+        )
+    }
+
+    /// Run the LIF compute shader (backward-compatible alias).
     pub fn step_lif(
         &mut self,
     ) -> (
@@ -514,11 +670,25 @@ impl GpuBackend {
     // ── Readback ──
 
     fn map_readback(&self, n: usize) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
+        Self::map_readback_impl(
+            &self.device, &self.staging_buf, self.staging_size,
+            self.staging_spiked_offset, self.staging_state_offset, n,
+        )
+    }
+
+    fn map_readback_impl(
+        device: &wgpu::Device,
+        staging_buf: &wgpu::Buffer,
+        staging_size: u64,
+        staging_spiked_offset: u64,
+        staging_state_offset: u64,
+        n: usize,
+    ) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
         let n_bytes = (n as u64) * 4;
-        let slice = self.staging_buf.slice(..self.staging_size);
+        let slice = staging_buf.slice(..staging_size);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-        self.device.poll(wgpu::Maintain::Wait);
+        device.poll(wgpu::Maintain::Wait);
 
         if rx.recv().ok() != Some(Ok(())) {
             return (
@@ -528,15 +698,15 @@ impl GpuBackend {
         }
 
         let data = slice.get_mapped_range();
-        let soff = self.staging_spiked_offset as usize;
-        let moff = self.staging_state_offset as usize;
+        let soff = staging_spiked_offset as usize;
+        let moff = staging_state_offset as usize;
         let spiked: Vec<u32> = bytemuck::cast_slice(&data[soff..moff]).to_vec();
         let mem_pot: Vec<f32> = bytemuck::cast_slice(&data[moff..][..n_bytes as usize]).to_vec();
         let rec_var: Vec<f32> = bytemuck::cast_slice(&data[moff + n_bytes as usize..][..n_bytes as usize]).to_vec();
         let refr_ctr: Vec<i32> = bytemuck::cast_slice(&data[moff + n_bytes as usize * 2..][..n_bytes as usize]).to_vec();
         let spike_ct: Vec<u32> = bytemuck::cast_slice(&data[moff + n_bytes as usize * 3..][..n_bytes as usize]).to_vec();
         drop(data);
-        self.staging_buf.unmap();
+        staging_buf.unmap();
         (spiked, mem_pot, rec_var, refr_ctr, spike_ct)
     }
 }
