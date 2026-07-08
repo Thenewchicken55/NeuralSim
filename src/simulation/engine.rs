@@ -68,6 +68,14 @@ pub struct SimulationEngine {
     synchrony_window: usize,
     /// Pre-built index: for each target neuron, list of incoming synapse indices
     synapses_by_target: Vec<Vec<usize>>,
+    /// Reward signal for R-STDP (dopamine-like modulation)
+    pub reward_signal: f64,
+    /// Number of output spikes in the current step (used to compute reward)
+    reward_output_spike_count: u64,
+    /// If output spikes exceed this threshold, reward is applied
+    pub reward_threshold: u64,
+    /// Reward decay per step (exponential decay toward 0)
+    pub reward_decay: f64,
     #[cfg(feature = "gpu")]
     pub gpu_backend: Option<GpuBackend>,
 }
@@ -103,6 +111,10 @@ impl SimulationEngine {
             spike_history: Vec::new(),
             synchrony_window: 100,
             synapses_by_target,
+            reward_signal: 0.0,
+            reward_output_spike_count: 0,
+            reward_threshold: 5,
+            reward_decay: 0.95,
             #[cfg(feature = "gpu")]
             gpu_backend: None,
         }
@@ -120,6 +132,17 @@ impl SimulationEngine {
 
     pub fn with_conductance(mut self, enable: bool) -> Self {
         self.use_conductance = enable;
+        self
+    }
+
+    pub fn with_reward(mut self, threshold: u64, decay: f64) -> Self {
+        self.reward_threshold = threshold;
+        self.reward_decay = decay;
+        self
+    }
+
+    pub fn with_reward_signal(mut self, signal: f64) -> Self {
+        self.reward_signal = signal;
         self
     }
 
@@ -413,6 +436,25 @@ impl SimulationEngine {
                     }
                 }
 
+                // R-STDP: apply reward signal if output spikes exceed threshold
+                if self.plasticity.rstdp.is_some() && self.reward_signal.abs() > 0.001 {
+                    for syn in net.synapses.iter_mut() {
+                        if let Some(ref mut et) = syn.eligibility {
+                            if let Some(ref rstdp) = self.plasticity.rstdp {
+                                et.apply_reward(
+                                    self.reward_signal,
+                                    &mut syn.weight,
+                                    rstdp.learning_rate,
+                                    rstdp.weight_min,
+                                    rstdp.weight_max,
+                                );
+                            }
+                        }
+                    }
+                }
+                // Decay reward signal
+                self.reward_signal *= self.reward_decay;
+
                 // Homeostatic scaling
                 if self.plasticity.homeostatic_tau > 0.0 {
                     let target_rate = self.plasticity.homeostatic_target_rate;
@@ -451,6 +493,12 @@ impl SimulationEngine {
             stats.output_spikes += output;
             stats.active_neurons = stats.active_neurons.max(spiked);
             stats.sim_time_ms = sim_time;
+
+            // Compute reward signal based on output activity
+            self.reward_output_spike_count = output;
+            if output >= self.reward_threshold {
+                self.reward_signal = (self.reward_signal + 1.0).min(1.0);
+            }
             stats.weight_updates = spiked;
 
             // Update firing rates (low-pass filter)
