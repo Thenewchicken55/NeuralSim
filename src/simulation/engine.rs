@@ -11,6 +11,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -286,6 +287,9 @@ impl SimulationEngine {
             (spikes, st)
         };
 
+        // Build spike_set for O(1) STDP lookups
+        let spike_set: HashSet<usize> = self.spike_buffer.iter().map(|&(nid, _)| nid).collect();
+
         // Phase 2: Propagate spikes through synapses with STDP and conductance
         {
             let mut net = self.network.write();
@@ -373,9 +377,9 @@ impl SimulationEngine {
                             // Decay traces
                             trace.decay(dt, stdp.tau_plus, stdp.tau_minus);
 
-                            // Check if pre-spike occurred during this step
-                            let pre_fired = self.spike_buffer.iter().any(|&(nid, _)| nid == syn.source);
-                            let post_fired = self.spike_buffer.iter().any(|&(nid, _)| nid == syn.target);
+                            // Check if pre/post spike occurred during this step (O(1) via HashSet)
+                            let pre_fired = spike_set.contains(&syn.source);
+                            let post_fired = spike_set.contains(&syn.target);
 
                             if pre_fired {
                                 // LTP: pre before post — weight increases based on post-trace
