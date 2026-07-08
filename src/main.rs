@@ -207,8 +207,41 @@ fn cli_demo(config_path: Option<String>, cli_seed: Option<u64>) {
     println!();
     println!("[4/5] Setting up text I/O pipeline...");
     let encoder = TextEncoder::default(500);
-    let _decoder = TextDecoder::from_encoder(&encoder);
+    let decoder = TextDecoder::from_encoder(&encoder);
     println!("  Vocabulary: {} characters", encoder.vocab_size());
+
+    // Test text encoding/decoding roundtrip
+    let test_input = "Hello NeuralSim";
+    println!("  Encoding: '{}'", test_input);
+    let input_spikes = encoder.encode(test_input, engine.stats().sim_time_ms, 50.0);
+    // Inject input spikes
+    {
+        let mut net = engine.network.write();
+        for &(neuron, _time) in &input_spikes {
+            if neuron < net.neurons.input_current.len() {
+                net.neurons.input_current[neuron] += 30.0;
+            }
+        }
+    }
+    // Run a bit more to process
+    for _ in 0..20 {
+        engine.step();
+    }
+    // Decode output spikes
+    let output_text = {
+        let net = engine.network.read();
+        let output_spikes: Vec<(usize, f64)> = (0..net.neuron_count())
+            .filter(|&i| net.neurons.is_output[i])
+            .flat_map(|i| {
+                if net.neurons.just_spiked[i] {
+                    vec![(i, net.time)]
+                } else { vec![] }
+            })
+            .collect();
+        let sim_time = net.time;
+        decoder.decode_with_threshold(&output_spikes, 0.0, sim_time, 50.0, 2)
+    };
+    println!("  Decoded: '{}'", output_text);
 
     // Show region rates
     println!();
