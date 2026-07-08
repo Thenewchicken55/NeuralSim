@@ -243,30 +243,101 @@ impl BrainVisualization {
         let _dt = now.duration_since(self.last_update).as_secs_f64();
         self.last_update = now;
 
-        // Update neuron counts and activity from network
-        let total_neurons = network.neuron_count();
-        if total_neurons == 0 {
-            return;
+        // Use the network's per-region data
+        let region_counts = network.region_counts();
+        let region_count = region_counts.len();
+
+        // If network has regions, rebuild the visualization to match
+        if region_count > 0 && region_count != self.regions.len() {
+            self.rebuild_from_network(network, &region_counts);
         }
 
-        // Distribute neurons across regions (simplified mapping)
-        let neurons_per_region = total_neurons / self.regions.len();
-        
         for (i, region) in self.regions.iter_mut().enumerate() {
-            region.neuron_count = neurons_per_region;
-            
-            // Calculate activity based on region characteristics
-            let base_activity = (i as f64 * 0.1).sin().abs();
-            let noise = (now.elapsed().as_millis() as f64 * 0.001).sin() * 0.1;
-            region.activity = (base_activity + noise).clamp(0.0, 1.0);
-            
-            // Decay activity
-            region.activity *= self.activity_decay;
+            if i < region_counts.len() {
+                let (ref name, count, spike_count) = region_counts[i];
+                region.name = name.clone();
+                region.neuron_count = count;
+                // Activity is the fraction of neurons that spiked
+                // (low-pass filtered via activity_decay)
+                let instant_activity = if count > 0 {
+                    (spike_count as f64 / count as f64).min(1.0)
+                } else {
+                    0.0
+                };
+                region.activity = region.activity * self.activity_decay + instant_activity * (1.0 - self.activity_decay);
+                region.is_active = instant_activity > 0.05;
+            } else {
+                region.activity *= self.activity_decay;
+                region.is_active = false;
+            }
         }
 
-        // Update pathway activity
+        // Update pathway activity based on connected region pairs
         for pathway in &mut self.pathways {
-            pathway.activity = (pathway.activity * 0.9 + pathway.strength * 0.1).clamp(0.0, 1.0);
+            if let (Some(from), Some(to)) = (
+                self.regions.iter().position(|r| r.name == pathway.from_region),
+                self.regions.iter().position(|r| r.name == pathway.to_region),
+            ) {
+                let avg_activity = (self.regions[from].activity + self.regions[to].activity) * 0.5;
+                pathway.activity = pathway.activity * 0.9 + avg_activity * 0.1;
+            } else {
+                pathway.activity *= 0.9;
+            }
+        }
+    }
+
+    /// Rebuild the region list from the current network structure
+    fn rebuild_from_network(&mut self, network: &Network, region_counts: &[(String, usize, usize)]) {
+        let colors = [
+            Color32::from_rgb(100, 150, 255),
+            Color32::from_rgb(150, 100, 255),
+            Color32::from_rgb(255, 100, 100),
+            Color32::from_rgb(255, 150, 50),
+            Color32::from_rgb(100, 200, 100),
+            Color32::from_rgb(200, 200, 100),
+            Color32::from_rgb(100, 200, 200),
+            Color32::from_rgb(200, 150, 100),
+            Color32::from_rgb(255, 100, 150),
+            Color32::from_rgb(150, 200, 150),
+            Color32::from_rgb(180, 180, 180),
+        ];
+
+        self.regions = region_counts.iter().enumerate().map(|(i, (name, _count, _spikes))| {
+            let angle = i as f64 * std::f64::consts::TAU / region_counts.len().max(1) as f64;
+            BrainRegion {
+                name: name.clone(),
+                description: format!("Region: {}", name),
+                center: Pos2::new(0.5 + 0.28 * angle.cos() as f32, 0.5 + 0.25 * angle.sin() as f32),
+                radius: 0.12,
+                color: colors[i % colors.len()],
+                neuron_count: 0,
+                activity: 0.0,
+                connections: Vec::new(),
+                is_active: false,
+            }
+        }).collect();
+
+        // Build pathways from network connectivity
+        self.pathways = Vec::new();
+        for (i, (name_i, _, _)) in region_counts.iter().enumerate() {
+            for (j, (name_j, _, _)) in region_counts.iter().enumerate() {
+                if i != j {
+                    let has_connection = network.synapses.iter().any(|s| {
+                        let src_region = network.neuron_region[s.source];
+                        let tgt_region = network.neuron_region[s.target];
+                        src_region == i && tgt_region == j
+                    });
+                    if has_connection {
+                        self.pathways.push(NeuralPathway {
+                            from_region: name_i.clone(),
+                            to_region: name_j.clone(),
+                            strength: 0.5,
+                            activity: 0.0,
+                            is_inhibitory: false,
+                        });
+                    }
+                }
+            }
         }
     }
 
