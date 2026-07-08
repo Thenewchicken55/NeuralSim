@@ -113,8 +113,11 @@ pub struct PlasticityConfig {
     pub homeostatic_target_rate: f64,
     pub homeostatic_tau: f64,
     /// Per-synapse contribution tracking time constant (ms)
+    #[serde(default = "default_contribution_tau")]
     pub contribution_tau: f64,
 }
+
+fn default_contribution_tau() -> f64 { 1000.0 }
 
 impl Default for PlasticityConfig {
     fn default() -> Self {
