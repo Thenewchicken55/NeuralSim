@@ -549,18 +549,14 @@ impl GpuBackend {
     fn dispatch_hh(
         &mut self,
     ) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
-        // HH pipeline also needs gate buffers uploaded — for now fall back to LIF dispatch
-        eprintln!("Warning: HH GPU shader requires gate buffers not yet allocated; falling back to LIF");
-        Self::dispatch_pipeline(
-            &self.device, &self.queue, &self.lif_pipeline,
-            &self.lif_bind_group, &self.uniform_bind_group,
-            &self.spiked_buf, &self.membrane_potential_buf,
-            &self.recovery_variable_buf, &self.refractory_counter_buf,
-            &self.spike_count_buf, &self.staging_buf,
-            self.staging_size,
-            self.staging_spiked_offset, self.staging_state_offset,
-            self.num_workgroups_neurons, self.num_neurons,
-        )
+        // HH GPU shader requires gate buffers (m, h, n) that are not yet allocated.
+        // This is a known limitation — HH on GPU requires additional storage buffers
+        // and a dedicated pipeline layout with 12+ bindings.
+        panic!("Hodgkin-Huxley GPU backend not yet implemented. Use LIF or Izhikevich models with --features gpu, or run on CPU.");
+
+        // When implementing: add hh_m/hh_h/hh_n buffers to GpuBackend,
+        // create a dedicated HH pipeline layout (needs 3 extra bindings),
+        // upload gating state, and dispatch the HH compute shader.
     }
 
     /// Run the LIF compute shader (backward-compatible alias).
