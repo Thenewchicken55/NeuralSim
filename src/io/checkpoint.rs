@@ -13,6 +13,8 @@ pub struct CheckpointMetadata {
     pub synapse_count: usize,
     pub total_spikes: u64,
     pub timestamp: String,
+    /// RNG seed used for this simulation run
+    pub seed: u64,
 }
 
 #[derive(Clone)]
@@ -49,6 +51,7 @@ impl CheckpointManager {
             synapse_count: network.synapse_count(),
             total_spikes: stats.total_spikes,
             timestamp: chrono_now(),
+            seed: stats.seed,
         };
 
         // Save metadata alongside

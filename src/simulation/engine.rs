@@ -29,6 +29,7 @@ pub struct SimulationStats {
     pub synchrony_index: f64,
     pub weight_mean: f64,
     pub weight_std: f64,
+    pub seed: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -118,6 +119,14 @@ impl SimulationEngine {
             #[cfg(feature = "gpu")]
             gpu_backend: None,
         }
+    }
+
+    /// Set the RNG seed used for this simulation.
+    /// This is stored in stats for checkpoint metadata.
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.rng = StdRng::seed_from_u64(seed);
+        self.stats.write().seed = seed;
+        self
     }
 
     pub fn with_plasticity(mut self, config: PlasticityConfig) -> Self {
