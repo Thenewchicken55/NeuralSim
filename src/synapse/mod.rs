@@ -57,6 +57,8 @@ pub struct SynapseState {
     pub stp: Option<plasticity::ShortTermPlasticity>,
     /// Whether plasticity is enabled on this synapse
     pub plasticity_enabled: bool,
+    /// Running average of this synapse's contribution to postsynaptic depolarization
+    pub contribution_avg: f64,
 }
 
 impl SynapseState {
@@ -74,6 +76,7 @@ impl SynapseState {
             eligibility: None,
             stp: None,
             plasticity_enabled: false,
+            contribution_avg: 0.0,
         }
     }
 
@@ -109,6 +112,8 @@ pub struct PlasticityConfig {
     pub enabled: bool,
     pub homeostatic_target_rate: f64,
     pub homeostatic_tau: f64,
+    /// Per-synapse contribution tracking time constant (ms)
+    pub contribution_tau: f64,
 }
 
 impl Default for PlasticityConfig {
@@ -123,6 +128,7 @@ impl Default for PlasticityConfig {
             enabled: true,
             homeostatic_target_rate: 5.0,
             homeostatic_tau: 5000.0,
+            contribution_tau: 1000.0,
         }
     }
 }

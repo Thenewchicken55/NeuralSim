@@ -239,52 +239,60 @@ impl SimulationEngine {
                 }
             }
 
-            let mut states: Vec<NeuronState> = (0..n)
-                .map(|i| NeuronState {
-                    membrane_potential: net.neurons.membrane_potential[i],
-                    recovery_variable: net.neurons.recovery_variable[i],
-                    refractory_counter: net.neurons.refractory_counter[i],
-                    last_spike_time: net.neurons.last_spike_time[i],
-                    spike_count: net.neurons.spike_count[i],
-                    neuron_type: net.neurons.neuron_type[i],
-                    model_params: net.neurons.model_params[i],
-                    hh_m: net.neurons.hh_m[i],
-                    hh_h: net.neurons.hh_h[i],
-                    hh_n: net.neurons.hh_n[i],
-                    just_spiked: net.neurons.just_spiked[i],
-                })
-                .collect();
-
+            // Operate directly on SoA fields via index-based parallelism
+            // to avoid per-step Vec<NeuronState> allocation and write-back.
+            let idxs: Vec<usize> = (0..n).collect();
             let input_currents: Vec<f64> = net.neurons.input_current.clone();
             let is_output: Vec<bool> = net.neurons.is_output.clone();
             let model_params: Vec<NeuronModelParams> = net.neurons.model_params.clone();
 
-            let spikes: Vec<bool> = states
-                .par_iter_mut()
-                .enumerate()
-                .map(|(i, state)| {
-                    let spiked = Self::step_neuron(i, state, dt, input_currents[i], &model_params);
+            // We need to mutate the SoA fields in parallel. Split into slices.
+            let mem_pot = &mut net.neurons.membrane_potential;
+            let rec_var = &mut net.neurons.recovery_variable;
+            let refr_ctr = &mut net.neurons.refractory_counter;
+            let last_time = &mut net.neurons.last_spike_time;
+            let spike_ct = &mut net.neurons.spike_count;
+            let hh_m = &mut net.neurons.hh_m;
+            let hh_h = &mut net.neurons.hh_h;
+            let hh_n = &mut net.neurons.hh_n;
+            let just_spiked = &mut net.neurons.just_spiked;
+
+            let spikes: Vec<bool> = idxs
+                .par_iter()
+                .map(|&i| {
+                    let mut state = NeuronState {
+                        membrane_potential: mem_pot[i],
+                        recovery_variable: rec_var[i],
+                        refractory_counter: refr_ctr[i],
+                        last_spike_time: last_time[i],
+                        spike_count: spike_ct[i],
+                        neuron_type: net.neurons.neuron_type[i],
+                        model_params: model_params[i],
+                        hh_m: hh_m[i],
+                        hh_h: hh_h[i],
+                        hh_n: hh_n[i],
+                        just_spiked: just_spiked[i],
+                    };
+                    let spiked = Self::step_neuron(i, &mut state, dt, input_currents[i], &model_params);
                     if spiked {
                         spike_count.fetch_add(1, Ordering::Relaxed);
                         if is_output[i] {
                             output_spike_count.fetch_add(1, Ordering::Relaxed);
                         }
                     }
+                    // Write back directly to SoA
+                    mem_pot[i] = state.membrane_potential;
+                    rec_var[i] = state.recovery_variable;
+                    refr_ctr[i] = state.refractory_counter;
+                    last_time[i] = state.last_spike_time;
+                    spike_ct[i] = state.spike_count;
+                    hh_m[i] = state.hh_m;
+                    hh_h[i] = state.hh_h;
+                    hh_n[i] = state.hh_n;
+                    just_spiked[i] = state.just_spiked;
                     spiked
                 })
                 .collect();
-
-            for (i, state) in states.into_iter().enumerate() {
-                net.neurons.membrane_potential[i] = state.membrane_potential;
-                net.neurons.recovery_variable[i] = state.recovery_variable;
-                net.neurons.refractory_counter[i] = state.refractory_counter;
-                net.neurons.last_spike_time[i] = state.last_spike_time;
-                net.neurons.spike_count[i] = state.spike_count;
-                net.neurons.hh_m[i] = state.hh_m;
-                net.neurons.hh_h[i] = state.hh_h;
-                net.neurons.hh_n[i] = state.hh_n;
-                net.neurons.just_spiked[i] = state.just_spiked;
-            }
 
             self.spike_buffer.clear();
             for (i, spiked) in spikes.iter().enumerate() {
@@ -331,7 +339,8 @@ impl SimulationEngine {
                 }
             }
 
-            // Process spikes
+            // Process spikes (track per-synapse contribution)
+            let contribution_decay = f64::exp(-dt / self.plasticity.contribution_tau);
             for &(neuron_id, spike_time) in self.spike_buffer.iter() {
                 let start = net.adjacency_ptr[neuron_id];
                 let end = net.adjacency_ptr[neuron_id + 1];
@@ -359,6 +368,12 @@ impl SimulationEngine {
                             } else {
                                 self.conductances[idx] += g_peak;
                             }
+                            // Track per-synapse contribution (conductance magnitude)
+                            if idx < n_syn {
+                                net.synapses[idx].contribution_avg =
+                                    net.synapses[idx].contribution_avg * contribution_decay
+                                    + g_peak.abs() * (1.0 - contribution_decay);
+                            }
                         }
                     } else {
                         // Direct current injection (simplified)
@@ -369,6 +384,12 @@ impl SimulationEngine {
                             current *= stp_local.step(dt, true);
                         }
                         net.neurons.input_current[target] += current;
+                        // Track per-synapse contribution (current magnitude)
+                        if idx < n_syn {
+                            net.synapses[idx].contribution_avg =
+                                net.synapses[idx].contribution_avg * contribution_decay
+                                + current.abs() * (1.0 - contribution_decay);
+                        }
                     }
                 }
             }
@@ -455,21 +476,39 @@ impl SimulationEngine {
                 // Decay reward signal
                 self.reward_signal *= self.reward_decay;
 
-                // Homeostatic scaling
+                // Per-synapse homeostatic scaling
+                // Each synapse is scaled toward a target contribution level.
+                // If postsynaptic rate exceeds target, weights decrease;
+                // if rate is below target, weights increase.
                 if self.plasticity.homeostatic_tau > 0.0 {
                     let target_rate = self.plasticity.homeostatic_target_rate;
                     for i in 0..net.neuron_count() {
                         let rate = self.firing_rates[i];
                         let error = rate - target_rate;
-                        let scale = 1.0 + error * dt / self.plasticity.homeostatic_tau;
 
                         if let Some(syn_indices) = self.synapses_by_target.get(i) {
+                            // Compute mean contribution across synapses targeting this neuron
+                            let mut sum_contrib = 0.0;
+                            let mut count = 0usize;
                             for &idx in syn_indices {
                                 if idx < n_syn {
-                                    net.synapses[idx].weight *= scale;
-                                    net.synapses[idx].weight = net.synapses[idx].weight
-                                        .clamp(0.0, 10.0);
+                                    sum_contrib += net.synapses[idx].contribution_avg;
+                                    count += 1;
                                 }
+                            }
+                            if count == 0 || sum_contrib < 1e-12 { continue; }
+                            let mean_contrib = sum_contrib / count as f64;
+
+                            for &idx in syn_indices {
+                                if idx >= n_syn { continue; }
+                                let syn = &mut net.synapses[idx];
+                                // Over-contributing synapses feel more error, under-contributing less
+                                let rel_contrib = syn.contribution_avg / mean_contrib;
+                                let per_syn_error = error * rel_contrib;
+                                // Scale < 1.0 when over-firing (reduces weight)
+                                let scale = f64::exp(-per_syn_error * dt / self.plasticity.homeostatic_tau);
+                                syn.weight *= scale;
+                                syn.weight = syn.weight.clamp(0.0, 10.0);
                             }
                         }
                     }

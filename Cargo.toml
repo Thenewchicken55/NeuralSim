@@ -28,3 +28,10 @@ eframe = { version = "0.34", optional = true, default-features = false, features
 # Optional GPU compute backend
 wgpu = { version = "22", optional = true }
 pollster = { version = "0.4", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "simulation_bench"
+harness = false
