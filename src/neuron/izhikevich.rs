@@ -18,6 +18,8 @@ pub struct IzhikevichNeuron;
 
 impl NeuronModel for IzhikevichNeuron {
     fn step(&mut self, state: &mut NeuronState, dt: f64, input_current: f64) -> bool {
+        state.just_spiked = false;
+
         let params = match &state.model_params {
             NeuronModelParams::Izhikevich { .. } => &state.model_params,
             _ => return false,
@@ -33,6 +35,7 @@ impl NeuronModel for IzhikevichNeuron {
             state.recovery_variable += d;
             state.last_spike_time = 0.0;
             state.spike_count += 1;
+            state.just_spiked = true;
             return true;
         }
 

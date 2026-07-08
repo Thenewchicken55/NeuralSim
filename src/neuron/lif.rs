@@ -13,6 +13,8 @@ pub struct LifNeuron;
 
 impl NeuronModel for LifNeuron {
     fn step(&mut self, state: &mut NeuronState, dt: f64, input_current: f64) -> bool {
+        state.just_spiked = false;
+
         let params = match &state.model_params {
             NeuronModelParams::Lif { .. } => &state.model_params,
             _ => return false,
@@ -44,6 +46,7 @@ impl NeuronModel for LifNeuron {
             state.refractory_counter = (refractory_period / dt).round() as i32;
             state.last_spike_time = 0.0; // caller sets absolute time
             state.spike_count += 1;
+            state.just_spiked = true;
             return true;
         }
 

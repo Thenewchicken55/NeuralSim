@@ -10,12 +10,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// This is the most biologically detailed model, capturing
 /// sodium and potassium channel dynamics.
+///
+/// Gating variables (m, h, n) are stored in NeuronState so they
+/// persist across steps in the SoA layout.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct HodgkinHuxleyNeuron {
-    pub m: f64,
-    pub h: f64,
-    pub n: f64,
-}
+pub struct HodgkinHuxleyNeuron;
 
 impl HodgkinHuxleyNeuron {
     fn alpha_m(v: f64) -> f64 {
@@ -73,13 +72,13 @@ impl NeuronModel for HodgkinHuxleyNeuron {
         let an = Self::alpha_n(v);
         let bn = Self::beta_n(v);
 
-        self.m += (am * (1.0 - self.m) - bm * self.m) * dt;
-        self.h += (ah * (1.0 - self.h) - bh * self.h) * dt;
-        self.n += (an * (1.0 - self.n) - bn * self.n) * dt;
+        state.hh_m += (am * (1.0 - state.hh_m) - bm * state.hh_m) * dt;
+        state.hh_h += (ah * (1.0 - state.hh_h) - bh * state.hh_h) * dt;
+        state.hh_n += (an * (1.0 - state.hh_n) - bn * state.hh_n) * dt;
 
         // Ionic currents
-        let i_na = g_na * self.m.powi(3) * self.h * (e_na - v);
-        let i_k = g_k * self.n.powi(4) * (e_k - v);
+        let i_na = g_na * state.hh_m.powi(3) * state.hh_h * (e_na - v);
+        let i_k = g_k * state.hh_n.powi(4) * (e_k - v);
         let i_l = g_l * (e_l - v);
 
         let dv = (input_current - i_na - i_k - i_l) / c_m * dt;
@@ -89,6 +88,7 @@ impl NeuronModel for HodgkinHuxleyNeuron {
             state.membrane_potential = -70.0;
             state.last_spike_time = 0.0;
             state.spike_count += 1;
+            state.just_spiked = true;
             return true;
         }
 
@@ -107,6 +107,9 @@ impl NeuronModel for HodgkinHuxleyNeuron {
         };
         let mut state = NeuronState::new(neuron_type, params);
         state.membrane_potential = -65.0;
+        state.hh_m = 0.05;
+        state.hh_h = 0.6;
+        state.hh_n = 0.32;
         state
     }
 }
@@ -117,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_hh_resting_potential() {
-        let mut neuron = HodgkinHuxleyNeuron { m: 0.05, h: 0.6, n: 0.32 };
+        let mut neuron = HodgkinHuxleyNeuron;
         let mut state = neuron.reset_state(NeuronType::Excitatory);
         let spiked = neuron.step(&mut state, 0.01, 0.0);
         assert!(!spiked);
@@ -126,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_hh_fires_with_current() {
-        let mut neuron = HodgkinHuxleyNeuron { m: 0.05, h: 0.6, n: 0.32 };
+        let mut neuron = HodgkinHuxleyNeuron;
         let mut state = neuron.reset_state(NeuronType::Excitatory);
 
         let mut fired = false;
@@ -137,5 +140,21 @@ mod tests {
             }
         }
         assert!(fired, "HH neuron should fire with sustained input current");
+    }
+
+    #[test]
+    fn test_hh_gating_state_persists() {
+        let mut neuron = HodgkinHuxleyNeuron;
+        let mut state = neuron.reset_state(NeuronType::Excitatory);
+        // After one step without input, gating should change slightly
+        let (m0, h0, n0) = (state.hh_m, state.hh_h, state.hh_n);
+        let _ = neuron.step(&mut state, 0.1, 0.0);
+        assert!(state.hh_m != m0 || state.hh_h != h0 || state.hh_n != n0,
+            "HH gating variables should change after a step");
+        // After another step, variables should continue evolving (not reset)
+        let (m1, h1, n1) = (state.hh_m, state.hh_h, state.hh_n);
+        let _ = neuron.step(&mut state, 0.1, 0.0);
+        assert!(state.hh_m != m1 || state.hh_h != h1 || state.hh_n != n1,
+            "HH gating variables should continue evolving across steps");
     }
 }

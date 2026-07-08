@@ -1,5 +1,6 @@
 use crate::neuron::lif::LifNeuron;
 use crate::neuron::izhikevich::IzhikevichNeuron;
+use crate::neuron::hodgkin_huxley::HodgkinHuxleyNeuron;
 use crate::neuron::{NeuronModel, NeuronModelParams, NeuronState};
 use crate::network::Network;
 use crate::synapse::{PlasticityConfig, SynapseType};
@@ -223,6 +224,10 @@ impl SimulationEngine {
                     spike_count: net.neurons.spike_count[i],
                     neuron_type: net.neurons.neuron_type[i],
                     model_params: net.neurons.model_params[i],
+                    hh_m: net.neurons.hh_m[i],
+                    hh_h: net.neurons.hh_h[i],
+                    hh_n: net.neurons.hh_n[i],
+                    just_spiked: net.neurons.just_spiked[i],
                 })
                 .collect();
 
@@ -251,6 +256,10 @@ impl SimulationEngine {
                 net.neurons.refractory_counter[i] = state.refractory_counter;
                 net.neurons.last_spike_time[i] = state.last_spike_time;
                 net.neurons.spike_count[i] = state.spike_count;
+                net.neurons.hh_m[i] = state.hh_m;
+                net.neurons.hh_h[i] = state.hh_h;
+                net.neurons.hh_n[i] = state.hh_n;
+                net.neurons.just_spiked[i] = state.just_spiked;
             }
 
             self.spike_buffer.clear();
@@ -483,6 +492,8 @@ impl SimulationEngine {
 
     fn step_neuron(i: usize, state: &mut NeuronState, dt: f64,
                    input_current: f64, model_params: &[NeuronModelParams]) -> bool {
+        // Gating state is now stored in NeuronState, so all models
+        // work as zero-sized types via the trait.
         match &model_params[i] {
             NeuronModelParams::Lif { .. } => {
                 LifNeuron.step(state, dt, input_current)
@@ -491,11 +502,7 @@ impl SimulationEngine {
                 IzhikevichNeuron.step(state, dt, input_current)
             }
             NeuronModelParams::HodgkinHuxley { .. } => {
-                // HH needs persistent gating state, create a temporary one
-                let mut hh = crate::neuron::hodgkin_huxley::HodgkinHuxleyNeuron {
-                    m: 0.05, h: 0.6, n: 0.32,
-                };
-                hh.step(state, dt, input_current)
+                HodgkinHuxleyNeuron.step(state, dt, input_current)
             }
         }
     }

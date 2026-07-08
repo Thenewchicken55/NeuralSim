@@ -23,6 +23,12 @@ pub struct NeuronState {
     pub spike_count: u64,
     pub neuron_type: NeuronType,
     pub model_params: NeuronModelParams,
+    /// Hodgkin-Huxley gating variables (m, h, n)
+    pub hh_m: f64,
+    pub hh_h: f64,
+    pub hh_n: f64,
+    /// Set to true when neuron fires a spike in the current step
+    pub just_spiked: bool,
 }
 
 impl NeuronState {
@@ -35,6 +41,10 @@ impl NeuronState {
             spike_count: 0,
             neuron_type,
             model_params: params,
+            hh_m: 0.05,
+            hh_h: 0.6,
+            hh_n: 0.32,
+            just_spiked: false,
         }
     }
 
@@ -43,7 +53,7 @@ impl NeuronState {
     }
 
     pub fn just_spiked(&self) -> bool {
-        self.refractory_counter > 0
+        self.just_spiked
     }
 }
 
@@ -118,6 +128,12 @@ pub struct NeuronArray {
     pub model_params: Vec<NeuronModelParams>,
     pub input_current: Vec<f64>,
     pub is_output: Vec<bool>,
+    /// Hodgkin-Huxley gating variables
+    pub hh_m: Vec<f64>,
+    pub hh_h: Vec<f64>,
+    pub hh_n: Vec<f64>,
+    /// Whether neuron fired in the most recent step
+    pub just_spiked: Vec<bool>,
 }
 
 impl NeuronArray {
@@ -133,6 +149,10 @@ impl NeuronArray {
             model_params: vec![default_params; size],
             input_current: vec![0.0; size],
             is_output: vec![false; size],
+            hh_m: vec![0.05; size],
+            hh_h: vec![0.6; size],
+            hh_n: vec![0.32; size],
+            just_spiked: vec![false; size],
         }
     }
 

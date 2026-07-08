@@ -1,5 +1,6 @@
 use crate::network::Network;
 use crate::simulation::{SimulationEngine, StepResult};
+use crate::gui::brain_viz::BrainVisualization;
 use eframe::egui;
 use rand::{Rng, SeedableRng};
 use std::sync::atomic::AtomicBool;
@@ -37,6 +38,10 @@ pub struct NeuralSimApp {
     // Recording stats
     #[allow(dead_code)]
     running_since: Instant,
+    // Brain visualization
+    brain_viz: BrainVisualization,
+    show_brain_viz: bool,
+    selected_brain_region: Option<usize>,
 }
 
 struct MovingAverage {
@@ -98,6 +103,9 @@ impl NeuralSimApp {
             show_region_stats: true,
             use_conductance: true,
             running_since: Instant::now(),
+            brain_viz: BrainVisualization::new(),
+            show_brain_viz: true,
+            selected_brain_region: None,
         }
     }
 
@@ -212,10 +220,17 @@ impl eframe::App for NeuralSimApp {
         let fps = 1.0 / frame_start.elapsed().as_secs_f64().max(1e-6);
         self.fps_tracker.push(fps);
 
+        // Update brain visualization
+        {
+            let eng = self.engine.lock();
+            let net = eng.network.read();
+            self.brain_viz.update_from_network(&net);
+        }
+
         // ── Top panel ──
         egui::Panel::top("controls").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("NeuralSim");
+                ui.heading("🧠 NeuralSim Brain Simulator");
                 ui.separator();
                 if ui.button("Reset").clicked() {
                     let mut eng = self.engine.lock();
@@ -245,6 +260,7 @@ impl eframe::App for NeuralSimApp {
                     ui.colored_label(egui::Color32::YELLOW, format!("⚡ OUTPUT! x{}", new_output));
                 }
                 ui.separator();
+                ui.checkbox(&mut self.show_brain_viz, "Brain View");
                 ui.checkbox(&mut self.show_raster, "Raster");
                 ui.checkbox(&mut self.show_lfp, "LFP");
                 ui.checkbox(&mut self.show_weights, "Weights");
@@ -255,8 +271,60 @@ impl eframe::App for NeuralSimApp {
         // ── Central panel ──
         egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.columns(2, |cols| {
-                // ── LEFT COLUMN: Controls + Stats ──
+                // ── LEFT COLUMN: Brain Visualization + Controls ──
                 cols[0].vertical(|ui| {
+                    if self.show_brain_viz {
+                        ui.group(|ui| {
+                            ui.label("🧠 Brain Region Visualization");
+                            ui.separator();
+                            
+                            let (response, painter) = ui.allocate_painter(
+                                egui::Vec2::new(ui.available_width(), 300.0),
+                                egui::Sense::click(),
+                            );
+                            
+                            // Handle clicks on brain regions
+                            if response.clicked() {
+                                if let Some(click_pos) = response.interact_pointer_pos() {
+                                    if let Some(region_idx) = self.brain_viz.handle_click(click_pos, response.rect) {
+                                        self.selected_brain_region = Some(region_idx);
+                                        
+                                        // Stimulate the clicked region
+                                        if let Some(region) = self.brain_viz.get_region_info(region_idx) {
+                                            let region_name = region.name.clone();
+                                            let mut eng = self.engine.lock();
+                                            let n = eng.network.read().neuron_count();
+                                            let mut rng = rand::rngs::StdRng::from_os_rng();
+                                            
+                                            // Stimulate random neurons in this region
+                                            for _ in 0..(n / 20).max(1) {
+                                                let idx = rng.random_range(0..n);
+                                                eng.stimulate(idx, self.stimulation_strength);
+                                            }
+                                            
+                                            // Update brain viz activity
+                                            self.brain_viz.stimulate_region(&region_name, 0.8);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Render the brain visualization
+                            let eng = self.engine.lock();
+                            let net = eng.network.read();
+                            self.brain_viz.render(&painter, response.rect, &net);
+                            
+                            ui.separator();
+                            
+                            // Show selected region info
+                            if let Some(region_idx) = self.selected_brain_region {
+                                self.brain_viz.render_info_panel(ui, region_idx);
+                            } else {
+                                ui.label("Click on a brain region to explore it");
+                            }
+                        });
+                    }
+                    
                     // Controls
                     ui.group(|ui| {
                         ui.label("Controls");
@@ -274,6 +342,14 @@ impl eframe::App for NeuralSimApp {
                                 let idx = rng.random_range(0..n);
                                 eng.stimulate(idx, self.stimulation_strength);
                             }
+                        }
+                        
+                        if ui.button("Stimulate Visual Cortex").clicked() {
+                            self.brain_viz.stimulate_region("Visual Cortex", 0.8);
+                        }
+                        
+                        if ui.button("Stimulate Motor Cortex").clicked() {
+                            self.brain_viz.stimulate_region("Motor Cortex", 0.8);
                         }
                     });
 
@@ -335,79 +411,86 @@ impl eframe::App for NeuralSimApp {
                     }
                 });
 
-                // ── RIGHT COLUMN: Network grid ──
+                // ── RIGHT COLUMN: Neural Activity + Info ──
                 cols[1].vertical(|ui| {
                     ui.group(|ui| {
-                        ui.label("Neural Network — click to stimulate");
+                        ui.label("🔬 Neural Activity Monitor");
                         ui.separator();
-
-                        // Handle click
-                        {
-                            let eng = self.engine.lock();
-                            let net = eng.network.read();
-                            let n = net.neuron_count();
-                            let (response, _painter) = ui.allocate_painter(
-                                egui::Vec2::new(ui.available_width(), 1.0),
-                                egui::Sense::click(),
-                            );
-
-                            if let Some(click_pos) = response.interact_pointer_pos() {
-                                if response.clicked() {
-                                    let rect = response.rect;
-                                    let rel_x = (click_pos.x - rect.left()) / rect.width();
-                                    let rel_y = (click_pos.y - rect.top()) / rect.height();
-                                    let col = (rel_x * self.grid_cols as f32).clamp(0.0, (self.grid_cols - 1) as f32) as usize;
-                                    let rows = (n as f32 / self.grid_cols as f32).ceil();
-                                    let row = (rel_y * rows).clamp(0.0, (n / self.grid_cols) as f32) as usize;
-                                    let idx = row * self.grid_cols + col;
-                                    if idx < n {
-                                        drop(net);
-                                        drop(eng);
-                                        let mut eng = self.engine.lock();
-                                        eng.stimulate(idx, self.stimulation_strength);
-                                    }
-                                }
+                        
+                        // Show real-time neural activity
+                        ui.label(format!("Active Neurons: {}", self.last_result.spiking_neurons.len()));
+                        ui.label(format!("Output Activity: {}", self.last_result.output_spiking_neurons.len()));
+                        
+                        // Show neural pathway activity
+                        ui.label("Active Pathways:");
+                        for pathway in &self.brain_viz.pathways {
+                            if pathway.activity > 0.1 {
+                                let color = if pathway.is_inhibitory {
+                                    egui::Color32::RED
+                                } else {
+                                    egui::Color32::GREEN
+                                };
+                                ui.colored_label(color, format!("{} → {}: {:.1}%", 
+                                    pathway.from_region, pathway.to_region, pathway.activity * 100.0));
                             }
                         }
-
-                        let eng = self.engine.lock();
-                        let net = eng.network.read();
-                        let n = net.neuron_count();
-                        let grid_cols = self.grid_cols;
-                        let cell_size = (ui.available_width() / grid_cols as f32).min(8.0).max(3.0);
-                        let total_w = cell_size * grid_cols as f32;
-                        let total_h = cell_size * ((n + grid_cols - 1) / grid_cols) as f32;
-
-                        let (response, painter) = ui.allocate_painter(
-                            egui::Vec2::new(total_w, total_h.min(600.0)),
-                            egui::Sense::hover(),
-                        );
-
-                        let to_screen = egui::emath::RectTransform::from_to(
-                            egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::Vec2::new(grid_cols as f32, (n as f32 / grid_cols as f32).ceil()),
-                            ),
-                            response.rect,
-                        );
-
-                        let display_n = n.min(grid_cols * ((total_h.min(600.0) / cell_size) as usize));
-                        for i in 0..display_n {
-                            let x = (i % grid_cols) as f32;
-                            let y = (i / grid_cols) as f32;
-                            let v = net.neurons.membrane_potential[i];
-                            let flash = self.neuron_flash[i];
-                            let is_output = net.neurons.is_output[i];
-                            let region_id = if i < net.neuron_region.len() { net.neuron_region[i] } else { 0 };
-                            let base_color = Self::neuron_color(v, flash, is_output, region_id);
-
-                            let pos = to_screen * egui::Pos2::new(x + 0.5, y + 0.5);
-                            let radius = cell_size * 0.4;
-                            painter.circle_filled(pos, radius, base_color);
-
-                            if is_output {
-                                painter.circle_stroke(pos, radius + 1.0, egui::Stroke::new(2.0, egui::Color32::GREEN));
-                            }
+                    });
+                    
+                    ui.group(|ui| {
+                        ui.label("🎯 Learning Progress");
+                        ui.separator();
+                        ui.label(format!("Weight Updates: {}", stats.weight_updates));
+                        ui.label(format!("Weight Mean: {:.3}", stats.weight_mean));
+                        ui.label(format!("Weight Std: {:.3}", stats.weight_std));
+                        
+                        // Show learning visualization
+                        let progress = (stats.weight_mean * 100.0).min(100.0) as f32;
+                        ui.add(egui::ProgressBar::new(progress as f32 / 100.0)
+                            .text(format!("{:.1}%", progress)));
+                        ui.label("Learning Progress");
+                    });
+                    
+                    ui.group(|ui| {
+                        ui.label("📊 Network Performance");
+                        ui.separator();
+                        ui.label(format!("Synchrony: {:.3}", stats.synchrony_index));
+                        ui.label(format!("Firing Rate: {:.1} Hz", stats.mean_firing_rate));
+                        
+                        // Show performance meter
+                        let performance = (stats.synchrony_index * 100.0).min(100.0) as f32;
+                        ui.add(egui::ProgressBar::new(performance / 100.0)
+                            .text(format!("{:.1}%", performance)));
+                        ui.label("Network Coordination");
+                    });
+                    
+                    // Interactive buttons for different brain functions
+                    ui.group(|ui| {
+                        ui.label("🧠 Brain Functions");
+                        ui.separator();
+                        
+                        if ui.button("👁️ Visual Processing").clicked() {
+                            self.brain_viz.stimulate_region("Visual Cortex", 0.9);
+                            self.brain_viz.stimulate_region("Occipital Lobe", 0.7);
+                        }
+                        
+                        if ui.button("🎵 Auditory Processing").clicked() {
+                            self.brain_viz.stimulate_region("Auditory Cortex", 0.9);
+                            self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
+                        }
+                        
+                        if ui.button("🏃 Motor Control").clicked() {
+                            self.brain_viz.stimulate_region("Motor Cortex", 0.9);
+                            self.brain_viz.stimulate_region("Cerebellum", 0.7);
+                        }
+                        
+                        if ui.button("💾 Memory Formation").clicked() {
+                            self.brain_viz.stimulate_region("Hippocampus", 0.9);
+                            self.brain_viz.stimulate_region("Frontal Lobe", 0.7);
+                        }
+                        
+                        if ui.button("😰 Emotional Response").clicked() {
+                            self.brain_viz.stimulate_region("Amygdala", 0.9);
+                            self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
                         }
                     });
                 });
