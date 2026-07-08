@@ -2,6 +2,9 @@ pub mod graph;
 pub mod region;
 pub mod connectivity;
 pub mod builder;
+pub mod simple_builder;
+
+pub use simple_builder::NetworkBuilder;
 
 use crate::neuron::{NeuronArray, NeuronType};
 use crate::synapse::{SynapseState, SynapseType};
@@ -45,13 +48,40 @@ impl Network {
         self.synapses.len()
     }
 
+    /// Add a synapse (deferred adjacency update — call finalize() after all adds).
     pub fn add_synapse(&mut self, synapse: SynapseState) {
-        let source = synapse.source;
-        for ptr in self.adjacency_ptr.iter_mut().skip(source + 1) {
-            *ptr += 1;
-        }
-        self.adjacency_indices.push(synapse.target);
         self.synapses.push(synapse);
+    }
+
+    /// Build CSR adjacency from synapses in O(N + M) time.
+    /// Must be called once after all synapses have been added via add_synapse().
+    pub fn finalize(&mut self) {
+        let n = self.neuron_count();
+        let m = self.synapses.len();
+        let mut degree = vec![0u32; n];
+        for syn in &self.synapses {
+            if syn.source < n {
+                degree[syn.source] += 1;
+            }
+        }
+        let mut ptr = vec![0usize; n + 1];
+        let mut sum = 0usize;
+        for (d, p) in degree.iter().zip(ptr.iter_mut().skip(1)) {
+            sum += *d as usize;
+            *p = sum;
+        }
+        let mut indices = vec![0usize; m];
+        // Place each target into its source's bucket using a write cursor per source
+        let mut cursor: Vec<usize> = ptr[..n].to_vec();
+        for syn in &self.synapses {
+            if syn.source < n {
+                let pos = &mut cursor[syn.source];
+                indices[*pos] = syn.target;
+                *pos += 1;
+            }
+        }
+        self.adjacency_ptr = ptr;
+        self.adjacency_indices = indices;
     }
 
     pub fn connect_random(&mut self, probability: f64, rng: &mut impl rand::Rng) {
@@ -68,6 +98,7 @@ impl Network {
                 }
             }
         }
+        self.finalize();
     }
 
     /// Count synapses per region

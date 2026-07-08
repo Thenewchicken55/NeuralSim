@@ -23,6 +23,7 @@ impl ConnectivityPattern {
                 Self::connect_distance_based(network, *sigma, *max_distance, rng)
             }
         }
+        network.finalize();
     }
 
     fn connect_erdos_renyi(network: &mut Network, p: f64, rng: &mut impl Rng) {

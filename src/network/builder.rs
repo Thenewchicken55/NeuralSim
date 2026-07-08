@@ -404,7 +404,8 @@ impl BrainBuilder {
             }
         }
 
-        // Rebuild adjacency pointers correctly after all synapses added
+        // Build CSR adjacency in O(N + M)
+        net.finalize();
         net
     }
 
