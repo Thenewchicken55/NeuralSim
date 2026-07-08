@@ -1,15 +1,25 @@
 use crate::network::Network;
-use crate::simulation::{SimulationEngine, StepResult};
+use crate::simulation::{SimulationEngine, SimulationStats, StepResult};
+use crate::simulation::scheduler::{Scheduler, SimSpeed};
 use crate::gui::brain_viz::BrainVisualization;
 use eframe::egui;
+use parking_lot::Mutex;
 use rand::{Rng, SeedableRng};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 
 pub struct NeuralSimApp {
-    engine: Arc<parking_lot::Mutex<SimulationEngine>>,
-    _running: Arc<AtomicBool>,
+    /// Shared engine (can be driven by scheduler or manually)
+    engine: Arc<Mutex<SimulationEngine>>,
+    /// Shared stats for lock-free reads
+    stats: Arc<parking_lot::RwLock<SimulationStats>>,
+    /// Optional scheduler for background-thread simulation
+    scheduler: Option<Scheduler>,
+    /// Whether simulation is running (scheduler mode)
+    sim_running: bool,
+    /// Simulation speed control
+    sim_speed: SimSpeed,
     neuron_count: usize,
     grid_cols: usize,
     spike_history: Vec<f64>,
@@ -35,9 +45,6 @@ pub struct NeuralSimApp {
     show_fr_histogram: bool,
     show_region_stats: bool,
     use_conductance: bool,
-    // Recording stats
-    #[allow(dead_code)]
-    running_since: Instant,
     // Brain visualization
     brain_viz: BrainVisualization,
     show_brain_viz: bool,
@@ -76,10 +83,16 @@ impl NeuralSimApp {
             net.neuron_count()
         };
         let grid_cols = (neuron_count as f64).sqrt().ceil() as usize;
+        let stats = Arc::new(parking_lot::RwLock::new(SimulationStats::default()));
+        let engine = Arc::new(Mutex::new(engine));
+        let scheduler = Scheduler::new(engine.clone(), stats.clone());
         Self {
             neuron_flash: vec![0u8; neuron_count],
-            engine: Arc::new(parking_lot::Mutex::new(engine)),
-            _running: Arc::new(AtomicBool::new(false)),
+            engine,
+            stats,
+            scheduler: Some(scheduler),
+            sim_running: false,
+            sim_speed: SimSpeed::FastAsPossible,
             neuron_count,
             grid_cols,
             spike_history: Vec::with_capacity(200),
@@ -102,7 +115,6 @@ impl NeuralSimApp {
             show_fr_histogram: true,
             show_region_stats: true,
             use_conductance: true,
-            running_since: Instant::now(),
             brain_viz: BrainVisualization::new(),
             show_brain_viz: true,
             selected_brain_region: None,
@@ -161,9 +173,36 @@ impl eframe::App for NeuralSimApp {
         let frame_dt = frame_start.duration_since(self.last_frame).as_secs_f64();
         self.last_frame = frame_start;
 
-        let steps = ((frame_dt * 1000.0 / 0.5) as usize).max(1).min(20);
+        // Track new spikes/output for display
+        let mut new_spikes = 0u64;
+        let mut new_output = 0u64;
+
+        // Run simulation steps (either via scheduler or manual)
         let mut total_result = StepResult::default();
-        {
+
+        if self.sim_running {
+            // Scheduler mode: stats are synced by background thread
+            if let Some(ref scheduler) = self.scheduler {
+                if !scheduler.is_running() {
+                    // Start if not already running
+                    // (scheduler.start is called when user presses Start)
+                }
+            }
+            // Read stats from shared snapshot
+            let stats_snapshot = self.stats.read().clone();
+            new_spikes = stats_snapshot.total_spikes - self.last_spike_count;
+            new_output = stats_snapshot.output_spikes - self.last_output_count;
+            self.last_spike_count = stats_snapshot.total_spikes;
+            self.last_output_count = stats_snapshot.output_spikes;
+            self.last_result = StepResult {
+                spike_count: new_spikes,
+                output_spike_count: new_output,
+                spiking_neurons: Vec::new(),
+                output_spiking_neurons: Vec::new(),
+            };
+        } else {
+            // Manual stepping (original behavior)
+            let steps = ((frame_dt * 1000.0 / 0.5) as usize).max(1).min(20);
             let mut eng = self.engine.lock();
             eng.noise_amplitude = self.noise_amplitude;
             eng.use_conductance = self.use_conductance;
@@ -177,6 +216,10 @@ impl eframe::App for NeuralSimApp {
                 total_result.spiking_neurons.extend(&result.spiking_neurons);
                 total_result.output_spiking_neurons.extend(&result.output_spiking_neurons);
             }
+            drop(eng);
+            new_spikes = total_result.spike_count;
+            new_output = total_result.output_spike_count;
+            self.last_result = total_result;
         }
 
         for f in self.neuron_flash.iter_mut() {
@@ -188,9 +231,10 @@ impl eframe::App for NeuralSimApp {
             self.output_flash_counter = self.output_flash_counter.saturating_sub(1);
         }
 
-        self.last_result = total_result;
-
-        let stats = {
+        // Read stats (from the shared snapshot in scheduler mode)
+        let stats = if self.sim_running {
+            self.stats.read().clone()
+        } else {
             let eng = self.engine.lock();
             eng.stats()
         };
@@ -200,8 +244,6 @@ impl eframe::App for NeuralSimApp {
             eng.lfp()
         };
 
-        let new_spikes = stats.total_spikes - self.last_spike_count;
-        let new_output = stats.output_spikes - self.last_output_count;
         self.last_spike_count = stats.total_spikes;
         self.last_output_count = stats.output_spikes;
         self.spike_history.push(new_spikes as f64);
@@ -232,7 +274,32 @@ impl eframe::App for NeuralSimApp {
             ui.horizontal(|ui| {
                 ui.heading("🧠 NeuralSim Brain Simulator");
                 ui.separator();
+                // Scheduler controls
+                if self.sim_running {
+                    if ui.button("⏹ Stop").clicked() {
+                        if let Some(ref sched) = self.scheduler {
+                            sched.stop();
+                        }
+                        self.sim_running = false;
+                    }
+                    ui.label("🟢 Running");
+                } else {
+                    if ui.button("▶ Start").clicked() {
+                        if let Some(ref sched) = self.scheduler {
+                            sched.start();
+                        }
+                        self.sim_running = true;
+                    }
+                    ui.label("⏸ Paused");
+                }
+                ui.separator();
                 if ui.button("Reset").clicked() {
+                    if self.sim_running {
+                        if let Some(ref sched) = self.scheduler {
+                            sched.stop();
+                        }
+                        self.sim_running = false;
+                    }
                     let mut eng = self.engine.lock();
                     *eng = SimulationEngine::new(Network::new(self.neuron_count));
                     self.last_spike_count = 0;
