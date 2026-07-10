@@ -1,3 +1,4 @@
+use crate::io::text::{TextDecoder, TextEncoder};
 use crate::network::Network;
 use crate::simulation::{SimulationEngine, SimulationStats, StepResult};
 use crate::simulation::scheduler::{Scheduler, SimSpeed};
@@ -49,6 +50,12 @@ pub struct NeuralSimApp {
     brain_viz: BrainVisualization,
     show_brain_viz: bool,
     selected_brain_region: Option<usize>,
+    // Text I/O
+    text_encoder: TextEncoder,
+    text_decoder: TextDecoder,
+    input_text: String,
+    output_text: String,
+    show_text_io: bool,
 }
 
 struct MovingAverage {
@@ -83,9 +90,12 @@ impl NeuralSimApp {
             net.neuron_count()
         };
         let grid_cols = (neuron_count as f64).sqrt().ceil() as usize;
-        let stats = Arc::new(parking_lot::RwLock::new(SimulationStats::default()));
+        let engine_stats = engine.stats();
+        let stats = Arc::new(parking_lot::RwLock::new(engine_stats));
         let engine = Arc::new(Mutex::new(engine));
         let scheduler = Scheduler::new(engine.clone(), stats.clone());
+        let text_encoder = TextEncoder::default(500);
+        let text_decoder = TextDecoder::from_encoder(&text_encoder);
         Self {
             neuron_flash: vec![0u8; neuron_count],
             engine,
@@ -118,6 +128,11 @@ impl NeuralSimApp {
             brain_viz: BrainVisualization::new(),
             show_brain_viz: true,
             selected_brain_region: None,
+            text_encoder,
+            text_decoder,
+            input_text: String::new(),
+            output_text: String::new(),
+            show_text_io: false,
         }
     }
 
@@ -331,6 +346,7 @@ impl eframe::App for NeuralSimApp {
                 ui.checkbox(&mut self.show_raster, "Raster");
                 ui.checkbox(&mut self.show_lfp, "LFP");
                 ui.checkbox(&mut self.show_weights, "Weights");
+                ui.checkbox(&mut self.show_text_io, "Text I/O");
                 ui.checkbox(&mut self.use_conductance, "Cond");
             });
         });
@@ -560,6 +576,53 @@ impl eframe::App for NeuralSimApp {
                             self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
                         }
                     });
+
+                    // Text I/O panel
+                    if self.show_text_io {
+                        ui.group(|ui| {
+                            ui.label("📝 Text I/O");
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label("Input:");
+                                let resp = ui.add_sized(
+                                    egui::vec2(150.0, 20.0),
+                                    egui::TextEdit::singleline(&mut self.input_text)
+                                        .hint_text("Type here..."),
+                                );
+                                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                    // Encode and inject
+                                    let text = self.input_text.clone();
+                                    let mut eng = self.engine.lock();
+                                    let sim_time = {
+                                        let net = eng.network.read();
+                                        net.time
+                                    };
+                                    let spikes = self.text_encoder.encode(&text, sim_time, 50.0);
+                                    for &(nid, _time) in &spikes {
+                                        if nid < eng.network.read().neuron_count() {
+                                            eng.stimulate(nid, 30.0);
+                                        }
+                                    }
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Output:");
+                                if ui.button("Decode").clicked() {
+                                    let eng = self.engine.lock();
+                                    let sim_time = eng.stats.read().sim_time_ms;
+                                    let net = eng.network.read();
+                                    let output_spikes: Vec<(usize, f64)> = (0..net.neuron_count())
+                                        .filter(|&i| net.neurons.is_output[i]
+                                            && net.neurons.just_spiked[i])
+                                        .map(|i| (i, net.time))
+                                        .collect();
+                                    self.output_text = self.text_decoder
+                                        .decode_with_threshold(&output_spikes, 0.0, sim_time, 50.0, 2);
+                                }
+                                ui.label(&self.output_text);
+                            });
+                        });
+                    }
                 });
             });
         });

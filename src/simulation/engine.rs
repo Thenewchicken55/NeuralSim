@@ -46,6 +46,8 @@ pub struct SimulationEngine {
     pub spike_buffer: Vec<(usize, f64)>,
     pub stats: Arc<RwLock<SimulationStats>>,
     rng: StdRng,
+    /// One RNG per Rayon thread for lock-free parallel stochastic operations
+    thread_rngs: Vec<StdRng>,
     pub noise_amplitude: f64,
     noise_density: f64,
     external_stimulus_chance: f64,
@@ -92,12 +94,18 @@ impl SimulationEngine {
                 synapses_by_target[target].push(idx);
             }
         }
+        let thread_count = rayon::current_num_threads().max(1);
+        let thread_rngs: Vec<StdRng> = (0..thread_count)
+            .map(|i| StdRng::seed_from_u64(42 + i as u64 + 1))
+            .collect();
+
         Self {
             network: Arc::new(RwLock::new(network)),
             dt: 0.5,
             spike_buffer: Vec::with_capacity(4096),
             stats: Arc::new(RwLock::new(SimulationStats::default())),
             rng: StdRng::seed_from_u64(42),
+            thread_rngs,
             noise_amplitude: 8.0,
             noise_density: 0.3,
             external_stimulus_chance: 0.01,
@@ -125,6 +133,10 @@ impl SimulationEngine {
     /// This is stored in stats for checkpoint metadata.
     pub fn with_seed(mut self, seed: u64) -> Self {
         self.rng = StdRng::seed_from_u64(seed);
+        let thread_count = self.thread_rngs.len().max(1);
+        self.thread_rngs = (0..thread_count)
+            .map(|i| StdRng::seed_from_u64(seed + i as u64 + 1))
+            .collect();
         self.stats.write().seed = seed;
         self
     }
@@ -715,6 +727,17 @@ impl SimulationEngine {
         if neuron < self.firing_rates.len() {
             self.firing_rates[neuron]
         } else { 0.0 }
+    }
+
+    /// Get a reference to the RNG for the current Rayon thread.
+    /// Falls back to the main rng if called outside the thread pool.
+    fn thread_rng(&mut self) -> &mut StdRng {
+        if let Some(idx) = rayon::current_thread_index() {
+            if idx < self.thread_rngs.len() {
+                return &mut self.thread_rngs[idx];
+            }
+        }
+        &mut self.rng
     }
 
     /// Get mean firing rate across all neurons
