@@ -17,9 +17,9 @@
 //! let mut pop = Population::random(30, &config);
 //! let evaluator = RateHomeostasis::new(5.0);
 //!
-//! for gen in 0..50 {
+//! for generation in 0..50 {
 //!     let best = pop.evolve_generation(&evaluator, &config);
-//!     println!("Gen {}: best={:.4} mean={:.4}", gen, best, pop.last_mean_fitness());
+//!     println!("Gen {}: best={:.4} mean={:.4}", generation, best, pop.last_mean_fitness());
 //! }
 //! ```
 

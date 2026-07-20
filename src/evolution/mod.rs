@@ -13,9 +13,9 @@
 //! let mut pop = Population::random(30, &config);
 //! let evaluator = RateHomeostasis::new(5.0); // target 5 Hz
 //!
-//! for gen in 0..100 {
+//! for generation in 0..100 {
 //!     let best = pop.evolve_generation(&evaluator, &config);
-//!     println!("Gen {}: best fitness = {:.4}", gen, best);
+//!     println!("Gen {}: best fitness = {:.4}", generation, best);
 //! }
 //! ```
 //!
