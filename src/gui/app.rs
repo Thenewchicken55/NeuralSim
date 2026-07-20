@@ -1,12 +1,11 @@
+use crate::gui::brain_viz::BrainVisualization;
 use crate::io::text::{TextDecoder, TextEncoder};
 use crate::network::Network;
-use crate::simulation::{SimulationEngine, SimulationStats, StepResult};
 use crate::simulation::scheduler::{Scheduler, SimSpeed};
-use crate::gui::brain_viz::BrainVisualization;
+use crate::simulation::{SimulationEngine, SimulationStats, StepResult};
 use eframe::egui;
 use parking_lot::Mutex;
 use rand::{Rng, SeedableRng};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,10 +18,9 @@ pub struct NeuralSimApp {
     scheduler: Option<Scheduler>,
     /// Whether simulation is running (scheduler mode)
     sim_running: bool,
-    /// Simulation speed control
+    #[allow(dead_code)]
     sim_speed: SimSpeed,
     neuron_count: usize,
-    grid_cols: usize,
     spike_history: Vec<f64>,
     output_history: Vec<f64>,
     lfp_history: Vec<f64>,
@@ -66,7 +64,11 @@ struct MovingAverage {
 
 impl MovingAverage {
     fn new(size: usize) -> Self {
-        Self { buffer: vec![0.0; size], idx: 0, sum: 0.0 }
+        Self {
+            buffer: vec![0.0; size],
+            idx: 0,
+            sum: 0.0,
+        }
     }
     fn push(&mut self, val: f64) {
         self.sum -= self.buffer[self.idx];
@@ -89,7 +91,6 @@ impl NeuralSimApp {
             let net = engine.network.read();
             net.neuron_count()
         };
-        let grid_cols = (neuron_count as f64).sqrt().ceil() as usize;
         let engine_stats = engine.stats();
         let stats = Arc::new(parking_lot::RwLock::new(engine_stats));
         let engine = Arc::new(Mutex::new(engine));
@@ -104,7 +105,6 @@ impl NeuralSimApp {
             sim_running: false,
             sim_speed: SimSpeed::FastAsPossible,
             neuron_count,
-            grid_cols,
             spike_history: Vec::with_capacity(200),
             output_history: Vec::with_capacity(200),
             lfp_history: Vec::with_capacity(200),
@@ -158,14 +158,19 @@ impl NeuralSimApp {
         eframe::run_native("NeuralSim", options, Box::new(|_cc| Ok(Box::new(app))))
     }
 
-    fn neuron_color(membrane_v: f64, flash: u8, is_output: bool, region_id: usize) -> egui::Color32 {
+    #[allow(dead_code)]
+    fn neuron_color(
+        membrane_v: f64,
+        flash: u8,
+        is_output: bool,
+        region_id: usize,
+    ) -> egui::Color32 {
         if flash > 0 {
             return egui::Color32::WHITE;
         }
         // Region-based color baseline
         let region_hue = (region_id as f32 * 0.15) % 1.0;
         let normalized = ((membrane_v + 70.0) / 35.0).clamp(0.0, 1.0) as f32;
-        let _brightness = (normalized * 0.5 + 0.3).min(1.0);
         let r = (region_hue.sin() * 127.0 + 128.0) as u8;
         let g = ((region_hue + 0.33).sin() * 127.0 + 128.0) as u8;
         let b = ((region_hue + 0.67).sin() * 127.0 + 128.0) as u8;
@@ -175,7 +180,7 @@ impl NeuralSimApp {
         let fg = (g as f32 * (1.0 - mix) + 80.0 * mix) as u8;
         let fb = (b as f32 * (1.0 - mix) + 0.0 * mix) as u8;
         if is_output {
-            egui::Color32::from_rgb(fr, (fg + 80).min(255), fb)
+            egui::Color32::from_rgb(fr, fg.saturating_add(80), fb)
         } else {
             egui::Color32::from_rgb(fr, fg, fb)
         }
@@ -188,21 +193,17 @@ impl eframe::App for NeuralSimApp {
         let frame_dt = frame_start.duration_since(self.last_frame).as_secs_f64();
         self.last_frame = frame_start;
 
-        // Track new spikes/output for display
-        let mut new_spikes = 0u64;
-        let mut new_output = 0u64;
+        // Track new spikes/output for display. In scheduler mode these come from
+        // the shared stats snapshot; in manual mode they come from total_result.
+        let new_spikes;
+        let new_output;
 
         // Run simulation steps (either via scheduler or manual)
         let mut total_result = StepResult::default();
 
         if self.sim_running {
-            // Scheduler mode: stats are synced by background thread
-            if let Some(ref scheduler) = self.scheduler {
-                if !scheduler.is_running() {
-                    // Start if not already running
-                    // (scheduler.start is called when user presses Start)
-                }
-            }
+            // Scheduler mode: stats are synced by background thread.
+            // The scheduler itself is started when the user presses Start.
             // Read stats from shared snapshot
             let stats_snapshot = self.stats.read().clone();
             new_spikes = stats_snapshot.total_spikes - self.last_spike_count;
@@ -217,7 +218,7 @@ impl eframe::App for NeuralSimApp {
             };
         } else {
             // Manual stepping (original behavior)
-            let steps = ((frame_dt * 1000.0 / 0.5) as usize).max(1).min(20);
+            let steps = ((frame_dt * 1000.0 / 0.5) as usize).clamp(1, 20);
             let mut eng = self.engine.lock();
             eng.noise_amplitude = self.noise_amplitude;
             eng.use_conductance = self.use_conductance;
@@ -229,21 +230,25 @@ impl eframe::App for NeuralSimApp {
                 total_result.spike_count += result.spike_count;
                 total_result.output_spike_count += result.output_spike_count;
                 total_result.spiking_neurons.extend(&result.spiking_neurons);
-                total_result.output_spiking_neurons.extend(&result.output_spiking_neurons);
+                total_result
+                    .output_spiking_neurons
+                    .extend(&result.output_spiking_neurons);
             }
             drop(eng);
             new_spikes = total_result.spike_count;
             new_output = total_result.output_spike_count;
-            self.last_result = total_result;
+            self.last_result = total_result.clone();
+            let total_output_this_step = total_result.output_spike_count;
+            // Use the snapshot to drive the output flash so we don't move total_result out
+            if total_output_this_step > 0 {
+                self.output_flash_counter = 10;
+            } else {
+                self.output_flash_counter = self.output_flash_counter.saturating_sub(1);
+            }
         }
 
         for f in self.neuron_flash.iter_mut() {
             *f = f.saturating_sub(1);
-        }
-        if total_result.output_spike_count > 0 {
-            self.output_flash_counter = 10;
-        } else {
-            self.output_flash_counter = self.output_flash_counter.saturating_sub(1);
         }
 
         // Read stats (from the shared snapshot in scheduler mode)
@@ -266,6 +271,9 @@ impl eframe::App for NeuralSimApp {
         self.lfp_history.push(lfp);
         self.firing_rate_history.push(stats.mean_firing_rate);
         self.weight_mean_history.push(stats.weight_mean);
+        // Ring-buffer eviction: drop the oldest sample from each history.
+        // All histories share the same `history_max` and are pushed together,
+        // so we only need to check one length.
         if self.spike_history.len() > self.history_max {
             self.spike_history.remove(0);
             self.output_history.remove(0);
@@ -360,45 +368,45 @@ impl eframe::App for NeuralSimApp {
                         ui.group(|ui| {
                             ui.label("🧠 Brain Region Visualization");
                             ui.separator();
-                            
+
                             let (response, painter) = ui.allocate_painter(
                                 egui::Vec2::new(ui.available_width(), 300.0),
                                 egui::Sense::click(),
                             );
-                            
+
                             // Handle clicks on brain regions
-                            if response.clicked() {
-                                if let Some(click_pos) = response.interact_pointer_pos() {
-                                    if let Some(region_idx) = self.brain_viz.handle_click(click_pos, response.rect) {
-                                        self.selected_brain_region = Some(region_idx);
-                                        
-                                        // Stimulate the clicked region
-                                        if let Some(region) = self.brain_viz.get_region_info(region_idx) {
-                                            let region_name = region.name.clone();
-                                            let mut eng = self.engine.lock();
-                                            let n = eng.network.read().neuron_count();
-                                            let mut rng = rand::rngs::StdRng::from_os_rng();
-                                            
-                                            // Stimulate random neurons in this region
-                                            for _ in 0..(n / 20).max(1) {
-                                                let idx = rng.random_range(0..n);
-                                                eng.stimulate(idx, self.stimulation_strength);
-                                            }
-                                            
-                                            // Update brain viz activity
-                                            self.brain_viz.stimulate_region(&region_name, 0.8);
-                                        }
+                            if response.clicked()
+                                && let Some(click_pos) = response.interact_pointer_pos()
+                                && let Some(region_idx) =
+                                    self.brain_viz.handle_click(click_pos, response.rect)
+                            {
+                                self.selected_brain_region = Some(region_idx);
+
+                                // Stimulate the clicked region
+                                if let Some(region) = self.brain_viz.get_region_info(region_idx) {
+                                    let region_name = region.name.clone();
+                                    let mut eng = self.engine.lock();
+                                    let n = eng.network.read().neuron_count();
+                                    let mut rng = rand::rngs::StdRng::from_os_rng();
+
+                                    // Stimulate random neurons in this region
+                                    for _ in 0..(n / 20).max(1) {
+                                        let idx = rng.random_range(0..n);
+                                        eng.stimulate(idx, self.stimulation_strength);
                                     }
+
+                                    // Update brain viz activity
+                                    self.brain_viz.stimulate_region(&region_name, 0.8);
                                 }
                             }
-                            
+
                             // Render the brain visualization
                             let eng = self.engine.lock();
                             let net = eng.network.read();
                             self.brain_viz.render(&painter, response.rect, &net);
-                            
+
                             ui.separator();
-                            
+
                             // Show selected region info
                             if let Some(region_idx) = self.selected_brain_region {
                                 self.brain_viz.render_info_panel(ui, region_idx);
@@ -407,15 +415,19 @@ impl eframe::App for NeuralSimApp {
                             }
                         });
                     }
-                    
+
                     // Controls
                     ui.group(|ui| {
                         ui.label("Controls");
                         ui.separator();
-                        ui.add(egui::Slider::new(&mut self.stimulation_strength, 0.0..=100.0)
-                            .text("Stim Strength"));
-                        ui.add(egui::Slider::new(&mut self.noise_amplitude, 0.0..=30.0)
-                            .text("Noise Level"));
+                        ui.add(
+                            egui::Slider::new(&mut self.stimulation_strength, 0.0..=100.0)
+                                .text("Stim Strength"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut self.noise_amplitude, 0.0..=30.0)
+                                .text("Noise Level"),
+                        );
 
                         if ui.button("Stimulate Random 10").clicked() {
                             let mut eng = self.engine.lock();
@@ -426,11 +438,11 @@ impl eframe::App for NeuralSimApp {
                                 eng.stimulate(idx, self.stimulation_strength);
                             }
                         }
-                        
+
                         if ui.button("Stimulate Visual Cortex").clicked() {
                             self.brain_viz.stimulate_region("Visual Cortex", 0.8);
                         }
-                        
+
                         if ui.button("Stimulate Motor Cortex").clicked() {
                             self.brain_viz.stimulate_region("Motor Cortex", 0.8);
                         }
@@ -449,13 +461,18 @@ impl eframe::App for NeuralSimApp {
                             let n = eng.network.read().neuron_count() as f64;
                             if n > 0.0 && stats.sim_time_ms > 0.0 {
                                 (stats.total_spikes as f64 / n) / (stats.sim_time_ms / 1000.0)
-                            } else { 0.0 }
+                            } else {
+                                0.0
+                            }
                         };
                         ui.label(format!("Avg rate: {:.1} Hz", rate));
                         ui.label(format!("Mean FR: {:.1} Hz", stats.mean_firing_rate));
                         ui.label(format!("Synch: {:.3}", stats.synchrony_index));
                         ui.label(format!("LFP: {:.2}", lfp));
-                        ui.label(format!("Weight μ={:.3} σ={:.3}", stats.weight_mean, stats.weight_std));
+                        ui.label(format!(
+                            "Weight μ={:.3} σ={:.3}",
+                            stats.weight_mean, stats.weight_std
+                        ));
                         ui.label(format!("Updates: {}", stats.weight_updates));
                     });
 
@@ -470,7 +487,9 @@ impl eframe::App for NeuralSimApp {
                                 let t = net.time.max(0.001);
                                 let rate = if count > 0 {
                                     spike_c as f64 / count as f64 / (t / 1000.0)
-                                } else { 0.0 };
+                                } else {
+                                    0.0
+                                };
                                 ui.label(format!("{}: {} nrn, {:.1} Hz", name, count, rate));
                             }
                         });
@@ -478,19 +497,43 @@ impl eframe::App for NeuralSimApp {
 
                     // Spike rate graph
                     if self.show_raster {
-                        self.draw_graph(ui, "Spike Rate", &self.spike_history, egui::Color32::LIGHT_BLUE, 80.0);
-                        self.draw_graph(ui, "Output Rate", &self.output_history, egui::Color32::YELLOW, 50.0);
+                        self.draw_graph(
+                            ui,
+                            "Spike Rate",
+                            &self.spike_history,
+                            egui::Color32::LIGHT_BLUE,
+                            80.0,
+                        );
+                        self.draw_graph(
+                            ui,
+                            "Output Rate",
+                            &self.output_history,
+                            egui::Color32::YELLOW,
+                            50.0,
+                        );
                     }
 
                     // LFP graph
                     if self.show_lfp {
                         self.draw_graph(ui, "LFP", &self.lfp_history, egui::Color32::RED, 50.0);
-                        self.draw_graph(ui, "Mean FR", &self.firing_rate_history, egui::Color32::GREEN, 50.0);
+                        self.draw_graph(
+                            ui,
+                            "Mean FR",
+                            &self.firing_rate_history,
+                            egui::Color32::GREEN,
+                            50.0,
+                        );
                     }
 
                     // Weight distribution
                     if self.show_weights {
-                        self.draw_graph(ui, "Weight Mean", &self.weight_mean_history, egui::Color32::MAGENTA, 40.0);
+                        self.draw_graph(
+                            ui,
+                            "Weight Mean",
+                            &self.weight_mean_history,
+                            egui::Color32::MAGENTA,
+                            40.0,
+                        );
                     }
                 });
 
@@ -499,11 +542,17 @@ impl eframe::App for NeuralSimApp {
                     ui.group(|ui| {
                         ui.label("🔬 Neural Activity Monitor");
                         ui.separator();
-                        
+
                         // Show real-time neural activity
-                        ui.label(format!("Active Neurons: {}", self.last_result.spiking_neurons.len()));
-                        ui.label(format!("Output Activity: {}", self.last_result.output_spiking_neurons.len()));
-                        
+                        ui.label(format!(
+                            "Active Neurons: {}",
+                            self.last_result.spiking_neurons.len()
+                        ));
+                        ui.label(format!(
+                            "Output Activity: {}",
+                            self.last_result.output_spiking_neurons.len()
+                        ));
+
                         // Show neural pathway activity
                         ui.label("Active Pathways:");
                         for pathway in &self.brain_viz.pathways {
@@ -513,64 +562,75 @@ impl eframe::App for NeuralSimApp {
                                 } else {
                                     egui::Color32::GREEN
                                 };
-                                ui.colored_label(color, format!("{} → {}: {:.1}%", 
-                                    pathway.from_region, pathway.to_region, pathway.activity * 100.0));
+                                ui.colored_label(
+                                    color,
+                                    format!(
+                                        "{} → {}: {:.1}%",
+                                        pathway.from_region,
+                                        pathway.to_region,
+                                        pathway.activity * 100.0
+                                    ),
+                                );
                             }
                         }
                     });
-                    
+
                     ui.group(|ui| {
                         ui.label("🎯 Learning Progress");
                         ui.separator();
                         ui.label(format!("Weight Updates: {}", stats.weight_updates));
                         ui.label(format!("Weight Mean: {:.3}", stats.weight_mean));
                         ui.label(format!("Weight Std: {:.3}", stats.weight_std));
-                        
+
                         // Show learning visualization
                         let progress = (stats.weight_mean * 100.0).min(100.0) as f32;
-                        ui.add(egui::ProgressBar::new(progress as f32 / 100.0)
-                            .text(format!("{:.1}%", progress)));
+                        ui.add(
+                            egui::ProgressBar::new(progress / 100.0)
+                                .text(format!("{:.1}%", progress)),
+                        );
                         ui.label("Learning Progress");
                     });
-                    
+
                     ui.group(|ui| {
                         ui.label("📊 Network Performance");
                         ui.separator();
                         ui.label(format!("Synchrony: {:.3}", stats.synchrony_index));
                         ui.label(format!("Firing Rate: {:.1} Hz", stats.mean_firing_rate));
-                        
+
                         // Show performance meter
                         let performance = (stats.synchrony_index * 100.0).min(100.0) as f32;
-                        ui.add(egui::ProgressBar::new(performance / 100.0)
-                            .text(format!("{:.1}%", performance)));
+                        ui.add(
+                            egui::ProgressBar::new(performance / 100.0)
+                                .text(format!("{:.1}%", performance)),
+                        );
                         ui.label("Network Coordination");
                     });
-                    
+
                     // Interactive buttons for different brain functions
                     ui.group(|ui| {
                         ui.label("🧠 Brain Functions");
                         ui.separator();
-                        
+
                         if ui.button("👁️ Visual Processing").clicked() {
                             self.brain_viz.stimulate_region("Visual Cortex", 0.9);
                             self.brain_viz.stimulate_region("Occipital Lobe", 0.7);
                         }
-                        
+
                         if ui.button("🎵 Auditory Processing").clicked() {
                             self.brain_viz.stimulate_region("Auditory Cortex", 0.9);
                             self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
                         }
-                        
+
                         if ui.button("🏃 Motor Control").clicked() {
                             self.brain_viz.stimulate_region("Motor Cortex", 0.9);
                             self.brain_viz.stimulate_region("Cerebellum", 0.7);
                         }
-                        
+
                         if ui.button("💾 Memory Formation").clicked() {
                             self.brain_viz.stimulate_region("Hippocampus", 0.9);
                             self.brain_viz.stimulate_region("Frontal Lobe", 0.7);
                         }
-                        
+
                         if ui.button("😰 Emotional Response").clicked() {
                             self.brain_viz.stimulate_region("Amygdala", 0.9);
                             self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
@@ -589,7 +649,9 @@ impl eframe::App for NeuralSimApp {
                                     egui::TextEdit::singleline(&mut self.input_text)
                                         .hint_text("Type here..."),
                                 );
-                                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                if resp.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                {
                                     // Encode and inject
                                     let text = self.input_text.clone();
                                     let mut eng = self.engine.lock();
@@ -612,12 +674,18 @@ impl eframe::App for NeuralSimApp {
                                     let sim_time = eng.stats.read().sim_time_ms;
                                     let net = eng.network.read();
                                     let output_spikes: Vec<(usize, f64)> = (0..net.neuron_count())
-                                        .filter(|&i| net.neurons.is_output[i]
-                                            && net.neurons.just_spiked[i])
+                                        .filter(|&i| {
+                                            net.neurons.is_output[i] && net.neurons.just_spiked[i]
+                                        })
                                         .map(|i| (i, net.time))
                                         .collect();
-                                    self.output_text = self.text_decoder
-                                        .decode_with_threshold(&output_spikes, 0.0, sim_time, 50.0, 2);
+                                    self.output_text = self.text_decoder.decode_with_threshold(
+                                        &output_spikes,
+                                        0.0,
+                                        sim_time,
+                                        50.0,
+                                        2,
+                                    );
                                 }
                                 ui.label(&self.output_text);
                             });
@@ -633,7 +701,14 @@ impl eframe::App for NeuralSimApp {
 
 // Helper: draw a line graph
 impl NeuralSimApp {
-    fn draw_graph(&self, ui: &mut egui::Ui, label: &str, data: &[f64], color: egui::Color32, height: f32) {
+    fn draw_graph(
+        &self,
+        ui: &mut egui::Ui,
+        label: &str,
+        data: &[f64],
+        color: egui::Color32,
+        height: f32,
+    ) {
         ui.group(|ui| {
             ui.label(label);
             ui.separator();
@@ -644,23 +719,31 @@ impl NeuralSimApp {
             if data.len() >= 2 {
                 let rect = response.rect;
                 let max_val = data.iter().cloned().fold(0.0f64, f64::max).max(1.0);
-                let w = rect.width(); let h = rect.height();
+                let w = rect.width();
+                let h = rect.height();
 
-                let points: Vec<egui::Pos2> = data.iter().enumerate().map(|(i, v)| {
-                    let x = rect.left() + (i as f32 / (data.len() - 1) as f32) * w;
-                    let y = rect.bottom() - (*v as f32 / max_val as f32) * h;
-                    egui::Pos2::new(x, y)
-                }).collect();
+                let points: Vec<egui::Pos2> = data
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let x = rect.left() + (i as f32 / (data.len() - 1) as f32) * w;
+                        let y = rect.bottom() - (*v as f32 / max_val as f32) * h;
+                        egui::Pos2::new(x, y)
+                    })
+                    .collect();
                 if points.len() > 1 {
-                    painter.add(egui::Shape::line(points, egui::Stroke::new(1.5, color)));
+                    painter.add(egui::Shape::line(points, egui::Stroke::new(1.5_f32, color)));
                 }
                 // Show current value
                 if let Some(&last) = data.last() {
                     let text = format!("{:.2}", last);
-                    painter.text(egui::Pos2::new(rect.right() - 40.0, rect.top() + 10.0),
-                                 egui::Align2::RIGHT_TOP, text,
-                                 egui::TextStyle::Monospace.resolve(ui.style()),
-                                 color);
+                    painter.text(
+                        egui::Pos2::new(rect.right() - 40.0, rect.top() + 10.0),
+                        egui::Align2::RIGHT_TOP,
+                        text,
+                        egui::TextStyle::Monospace.resolve(ui.style()),
+                        color,
+                    );
                 }
             }
         });

@@ -17,11 +17,21 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-      - name: Build
+      - name: Install Linux GUI dependencies
+        # eframe/winit require X11/Wayland development headers on Linux.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev libxcb1-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxtst-dev libxkbcommon-dev \
+            libwayland-dev libgl1-mesa-dev pkg-config
+      - name: Build (all features)
         run: cargo build --release --all-features
+      - name: Build (headless)
+        run: cargo build --no-default-features
       - name: Test
         run: cargo test --all-features
       - name: Clippy
-        run: cargo clippy --all-features -- -D warnings
+        run: cargo clippy --all-features --all-targets -- -D warnings
       - name: Format check
         run: cargo fmt --check

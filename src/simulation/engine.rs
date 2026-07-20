@@ -1,8 +1,8 @@
-use crate::neuron::lif::LifNeuron;
-use crate::neuron::izhikevich::IzhikevichNeuron;
-use crate::neuron::hodgkin_huxley::HodgkinHuxleyNeuron;
-use crate::neuron::{NeuronModel, NeuronModelParams, NeuronState};
 use crate::network::Network;
+use crate::neuron::hodgkin_huxley::HodgkinHuxleyNeuron;
+use crate::neuron::izhikevich::IzhikevichNeuron;
+use crate::neuron::lif::LifNeuron;
+use crate::neuron::{NeuronArray, NeuronModel, NeuronModelParams, NeuronState};
 use crate::synapse::{PlasticityConfig, SynapseType};
 
 use crate::synapse::types::dynamics_for;
@@ -12,8 +12,8 @@ use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "gpu")]
 use crate::simulation::gpu_backend::GpuBackend;
@@ -46,8 +46,6 @@ pub struct SimulationEngine {
     pub spike_buffer: Vec<(usize, f64)>,
     pub stats: Arc<RwLock<SimulationStats>>,
     rng: StdRng,
-    /// One RNG per Rayon thread for lock-free parallel stochastic operations
-    thread_rngs: Vec<StdRng>,
     pub noise_amplitude: f64,
     noise_density: f64,
     external_stimulus_chance: f64,
@@ -56,8 +54,6 @@ pub struct SimulationEngine {
     pub plasticity: PlasticityConfig,
     /// Per-neuron firing rate estimates (for homeostatic / BCM)
     firing_rates: Vec<f64>,
-    /// Per-neuron BCM theta thresholds
-    _bcm_theta: Vec<f64>,
     /// Step counter for periodic tasks
     step_count: u64,
     /// Synaptic conductance buffers (per synapse, for alpha function)
@@ -66,8 +62,8 @@ pub struct SimulationEngine {
     pub use_conductance: bool,
     /// LFP signal (sum of absolute synaptic currents)
     pub lfp_signal: f64,
-    /// Spike history for synchrony (last N steps)
-    spike_history: Vec<Vec<bool>>,
+    /// Spike history for synchrony (last N steps). `VecDeque` for O(1) front pops.
+    spike_history: std::collections::VecDeque<Vec<bool>>,
     synchrony_window: usize,
     /// Pre-built index: for each target neuron, list of incoming synapse indices
     synapses_by_target: Vec<Vec<usize>>,
@@ -94,10 +90,6 @@ impl SimulationEngine {
                 synapses_by_target[target].push(idx);
             }
         }
-        let thread_count = rayon::current_num_threads().max(1);
-        let thread_rngs: Vec<StdRng> = (0..thread_count)
-            .map(|i| StdRng::seed_from_u64(42 + i as u64 + 1))
-            .collect();
 
         Self {
             network: Arc::new(RwLock::new(network)),
@@ -105,19 +97,17 @@ impl SimulationEngine {
             spike_buffer: Vec::with_capacity(4096),
             stats: Arc::new(RwLock::new(SimulationStats::default())),
             rng: StdRng::seed_from_u64(42),
-            thread_rngs,
             noise_amplitude: 8.0,
             noise_density: 0.3,
             external_stimulus_chance: 0.01,
             external_stimulus_strength: 20.0,
             plasticity: PlasticityConfig::default(),
             firing_rates: vec![0.0; n],
-            _bcm_theta: vec![0.5; n],
             step_count: 0,
             conductances: vec![0.0; n_syn],
             use_conductance: true,
             lfp_signal: 0.0,
-            spike_history: Vec::new(),
+            spike_history: std::collections::VecDeque::new(),
             synchrony_window: 100,
             synapses_by_target,
             reward_signal: 0.0,
@@ -133,10 +123,6 @@ impl SimulationEngine {
     /// This is stored in stats for checkpoint metadata.
     pub fn with_seed(mut self, seed: u64) -> Self {
         self.rng = StdRng::seed_from_u64(seed);
-        let thread_count = self.thread_rngs.len().max(1);
-        self.thread_rngs = (0..thread_count)
-            .map(|i| StdRng::seed_from_u64(seed + i as u64 + 1))
-            .collect();
         self.stats.write().seed = seed;
         self
     }
@@ -180,8 +166,13 @@ impl SimulationEngine {
         if let Some(rstdp) = &self.plasticity.rstdp {
             for syn in net.synapses.iter_mut() {
                 if let Some(ref mut et) = syn.eligibility {
-                    et.apply_reward(reward, &mut syn.weight, rstdp.learning_rate,
-                                    rstdp.weight_min, rstdp.weight_max);
+                    et.apply_reward(
+                        reward,
+                        &mut syn.weight,
+                        rstdp.learning_rate,
+                        rstdp.weight_min,
+                        rstdp.weight_max,
+                    );
                 }
             }
         }
@@ -198,24 +189,57 @@ impl SimulationEngine {
         {
             let net = self.network.read();
             let n = net.neuron_count();
-            let mem_pot: Vec<f32> = net.neurons.membrane_potential.iter().map(|&v| v as f32).collect();
-            let rec_var: Vec<f32> = net.neurons.recovery_variable.iter().map(|&v| v as f32).collect();
+            let mem_pot: Vec<f32> = net
+                .neurons
+                .membrane_potential
+                .iter()
+                .map(|&v| v as f32)
+                .collect();
+            let rec_var: Vec<f32> = net
+                .neurons
+                .recovery_variable
+                .iter()
+                .map(|&v| v as f32)
+                .collect();
             let refr_ctr: Vec<i32> = net.neurons.refractory_counter.clone();
-            let last_time: Vec<f32> = net.neurons.last_spike_time.iter().map(|&v| v as f32).collect();
+            let last_time: Vec<f32> = net
+                .neurons
+                .last_spike_time
+                .iter()
+                .map(|&v| v as f32)
+                .collect();
             let spike_ct: Vec<u32> = net.neurons.spike_count.iter().map(|&v| v as u32).collect();
-            let is_output: Vec<u32> = net.neurons.is_output.iter().map(|&b| if b { 1 } else { 0 }).collect();
+            let is_output: Vec<u32> = net
+                .neurons
+                .is_output
+                .iter()
+                .map(|&b| if b { 1 } else { 0 })
+                .collect();
 
             let params: Vec<[f32; 6]> = (0..n)
                 .map(|i| match &net.neurons.model_params[i] {
-                    NeuronModelParams::Lif { resting, threshold, reset, tau_m, refractory_period, input_resistance } => [
-                        *resting as f32, *threshold as f32, *reset as f32,
-                        *tau_m as f32, *refractory_period as f32, *input_resistance as f32,
+                    NeuronModelParams::Lif {
+                        resting,
+                        threshold,
+                        reset,
+                        tau_m,
+                        refractory_period,
+                        input_resistance,
+                    } => [
+                        *resting as f32,
+                        *threshold as f32,
+                        *reset as f32,
+                        *tau_m as f32,
+                        *refractory_period as f32,
+                        *input_resistance as f32,
                     ],
                     _ => [0.0; 6],
                 })
                 .collect();
 
-            gpu.upload_initial_state(&mem_pot, &rec_var, &refr_ctr, &last_time, &spike_ct, &params, &is_output);
+            gpu.upload_initial_state(
+                &mem_pot, &rec_var, &refr_ctr, &last_time, &spike_ct, &params, &is_output,
+            );
 
             let adj_ptr: Vec<u32> = net.adjacency_ptr.iter().map(|&v| v as u32).collect();
             let adj_indices: Vec<u32> = net.adjacency_indices.iter().map(|&v| v as u32).collect();
@@ -244,8 +268,9 @@ impl SimulationEngine {
         let (_all_spiked, sim_time) = {
             let mut net = self.network.write();
             let n = net.neuron_count();
+            let sim_time_now = net.time;
 
-            // Inject background noise
+            // Inject background noise (single-threaded — small relative to neuron update)
             for i in 0..n {
                 if self.rng.random::<f64>() < self.noise_density {
                     net.neurons.input_current[i] += self.rng.random::<f64>() * self.noise_amplitude;
@@ -256,61 +281,87 @@ impl SimulationEngine {
                 let count = self.rng.random_range(5..=30);
                 for _ in 0..count {
                     let target = self.rng.random_range(0..n);
-                    net.neurons.input_current[target] += self.rng.random::<f64>() * self.external_stimulus_strength;
+                    net.neurons.input_current[target] +=
+                        self.rng.random::<f64>() * self.external_stimulus_strength;
                 }
             }
 
-            // Operate directly on SoA fields via index-based parallelism
-            // to avoid per-step Vec<NeuronState> allocation and write-back.
-            let idxs: Vec<usize> = (0..n).collect();
-            let input_currents: Vec<f64> = net.neurons.input_current.clone();
-            let is_output: Vec<bool> = net.neurons.is_output.clone();
-            let model_params: Vec<NeuronModelParams> = net.neurons.model_params.clone();
+            // Operate directly on the SoA fields in parallel.
+            //
+            // We use the "split borrow" pattern: by destructuring `&mut NeuronArray`
+            // into separate `&mut Vec<T>` bindings for each field, the borrow checker
+            // can see that each field is a disjoint mutable borrow. Combined with
+            // rayon's `zip_eq`, this gives us lock-free parallel mutation of each
+            // SoA array with no cloning of the read-only fields.
+            let n_arr = &mut net.neurons;
+            let NeuronArray {
+                membrane_potential,
+                recovery_variable,
+                refractory_counter,
+                last_spike_time,
+                spike_count: spike_ct_arr,
+                neuron_type,
+                model_params,
+                input_current,
+                is_output,
+                hh_m,
+                hh_h,
+                hh_n,
+                just_spiked,
+            } = n_arr;
 
-            // We need to mutate the SoA fields in parallel. Split into slices.
-            let mem_pot = &mut net.neurons.membrane_potential;
-            let rec_var = &mut net.neurons.recovery_variable;
-            let refr_ctr = &mut net.neurons.refractory_counter;
-            let last_time = &mut net.neurons.last_spike_time;
-            let spike_ct = &mut net.neurons.spike_count;
-            let hh_m = &mut net.neurons.hh_m;
-            let hh_h = &mut net.neurons.hh_h;
-            let hh_n = &mut net.neurons.hh_n;
-            let just_spiked = &mut net.neurons.just_spiked;
-
-            let spikes: Vec<bool> = idxs
-                .par_iter()
-                .map(|&i| {
+            let spikes: Vec<bool> = membrane_potential
+                .par_iter_mut()
+                .enumerate()
+                .zip_eq(recovery_variable)
+                .zip_eq(refractory_counter)
+                .zip_eq(last_spike_time)
+                .zip_eq(spike_ct_arr)
+                .zip_eq(neuron_type)
+                .zip_eq(model_params)
+                .zip_eq(input_current)
+                .zip_eq(&*is_output)
+                .zip_eq(hh_m)
+                .zip_eq(hh_h)
+                .zip_eq(hh_n)
+                .zip_eq(just_spiked)
+                .map(|nested| {
+                    // Destructure the deeply-nested tuple produced by zip_eq chain.
+                    // Done inside the body to keep the closure signature readable.
+                    let ((((((((((((i, v), u), refr), lst), ct), nt), mp), ic), io), hm), hh), hn) =
+                        nested.0;
+                    let js = nested.1;
+                    let _ = i;
                     let mut state = NeuronState {
-                        membrane_potential: mem_pot[i],
-                        recovery_variable: rec_var[i],
-                        refractory_counter: refr_ctr[i],
-                        last_spike_time: last_time[i],
-                        spike_count: spike_ct[i],
-                        neuron_type: net.neurons.neuron_type[i],
-                        model_params: model_params[i],
-                        hh_m: hh_m[i],
-                        hh_h: hh_h[i],
-                        hh_n: hh_n[i],
-                        just_spiked: just_spiked[i],
+                        membrane_potential: *v,
+                        recovery_variable: *u,
+                        refractory_counter: *refr,
+                        last_spike_time: *lst,
+                        spike_count: *ct,
+                        neuron_type: *nt,
+                        model_params: *mp,
+                        hh_m: *hm,
+                        hh_h: *hh,
+                        hh_n: *hn,
+                        just_spiked: *js,
                     };
-                    let spiked = Self::step_neuron(i, &mut state, dt, input_currents[i], &model_params);
+                    let spiked = Self::step_neuron(&mut state, dt, *ic, sim_time_now);
                     if spiked {
                         spike_count.fetch_add(1, Ordering::Relaxed);
-                        if is_output[i] {
+                        if *io {
                             output_spike_count.fetch_add(1, Ordering::Relaxed);
                         }
                     }
-                    // Write back directly to SoA
-                    mem_pot[i] = state.membrane_potential;
-                    rec_var[i] = state.recovery_variable;
-                    refr_ctr[i] = state.refractory_counter;
-                    last_time[i] = state.last_spike_time;
-                    spike_ct[i] = state.spike_count;
-                    hh_m[i] = state.hh_m;
-                    hh_h[i] = state.hh_h;
-                    hh_n[i] = state.hh_n;
-                    just_spiked[i] = state.just_spiked;
+                    // Write back to SoA
+                    *v = state.membrane_potential;
+                    *u = state.recovery_variable;
+                    *refr = state.refractory_counter;
+                    *lst = state.last_spike_time;
+                    *ct = state.spike_count;
+                    *hm = state.hh_m;
+                    *hh = state.hh_h;
+                    *hn = state.hh_n;
+                    *js = state.just_spiked;
                     spiked
                 })
                 .collect();
@@ -318,7 +369,7 @@ impl SimulationEngine {
             self.spike_buffer.clear();
             for (i, spiked) in spikes.iter().enumerate() {
                 if *spiked {
-                    self.spike_buffer.push((i, net.time));
+                    self.spike_buffer.push((i, sim_time_now));
                     local_spiking.push(i);
                     if is_output[i] {
                         local_output_spiking.push(i);
@@ -326,11 +377,11 @@ impl SimulationEngine {
                 }
             }
 
-            // Track spike history for synchrony
+            // Track spike history for synchrony (VecDeque for O(1) front pops)
             if self.synchrony_window > 0 {
-                self.spike_history.push(spikes.clone());
-                if self.spike_history.len() > self.synchrony_window {
-                    self.spike_history.remove(0);
+                self.spike_history.push_back(spikes.clone());
+                while self.spike_history.len() > self.synchrony_window {
+                    self.spike_history.pop_front();
                 }
             }
 
@@ -366,9 +417,13 @@ impl SimulationEngine {
                 let start = net.adjacency_ptr[neuron_id];
                 let end = net.adjacency_ptr[neuron_id + 1];
                 for idx in start..end {
-                    if idx >= n_syn { break; }
+                    if idx >= n_syn {
+                        break;
+                    }
                     let target = net.adjacency_indices[idx];
-                    if target >= net.neurons.len() { continue; }
+                    if target >= net.neurons.len() {
+                        continue;
+                    }
 
                     let syn = &net.synapses[idx];
                     let delay = syn.delay;
@@ -384,7 +439,9 @@ impl SimulationEngine {
                             // Peak conductance at t=0 after spike
                             let g_peak = syn.weight * dyns.conductance_max * mg_factor;
 
-                            if syn.synapse_type == SynapseType::GABA || syn.synapse_type == SynapseType::GabaB {
+                            if syn.synapse_type == SynapseType::GABA
+                                || syn.synapse_type == SynapseType::GabaB
+                            {
                                 self.conductances[idx] += g_peak.abs();
                             } else {
                                 self.conductances[idx] += g_peak;
@@ -393,7 +450,7 @@ impl SimulationEngine {
                             if idx < n_syn {
                                 net.synapses[idx].contribution_avg =
                                     net.synapses[idx].contribution_avg * contribution_decay
-                                    + g_peak.abs() * (1.0 - contribution_decay);
+                                        + g_peak.abs() * (1.0 - contribution_decay);
                             }
                         }
                     } else {
@@ -407,8 +464,8 @@ impl SimulationEngine {
                         net.neurons.input_current[target] += current;
                         // Track per-synapse contribution (current magnitude)
                         if idx < n_syn {
-                            net.synapses[idx].contribution_avg =
-                                net.synapses[idx].contribution_avg * contribution_decay
+                            net.synapses[idx].contribution_avg = net.synapses[idx].contribution_avg
+                                * contribution_decay
                                 + current.abs() * (1.0 - contribution_decay);
                         }
                     }
@@ -420,9 +477,13 @@ impl SimulationEngine {
                 for idx in 0..n_syn {
                     let syn = &net.synapses[idx];
                     let g = self.conductances[idx];
-                    if g.abs() < 1e-12 { continue; }
+                    if g.abs() < 1e-12 {
+                        continue;
+                    }
                     let target = syn.target;
-                    if target >= net.neurons.len() { continue; }
+                    if target >= net.neurons.len() {
+                        continue;
+                    }
                     let dyns = dynamics_for(&syn.synapse_type);
                     let v = net.neurons.membrane_potential[target];
                     // I_syn = g(t) * (V - E_rev)
@@ -437,7 +498,9 @@ impl SimulationEngine {
                 let current_time = net.time;
                 if let Some(ref stdp) = self.plasticity.stdp {
                     for syn in net.synapses.iter_mut() {
-                        if !syn.plasticity_enabled || syn.stdp_trace.is_none() { continue; }
+                        if !syn.plasticity_enabled || syn.stdp_trace.is_none() {
+                            continue;
+                        }
                         if let Some(ref mut trace) = syn.stdp_trace {
                             // Decay traces
                             trace.decay(dt, stdp.tau_plus, stdp.tau_minus);
@@ -449,7 +512,8 @@ impl SimulationEngine {
                             if pre_fired {
                                 // LTP: pre before post — weight increases based on post-trace
                                 let delta = stdp.a_plus * trace.post_trace;
-                                syn.weight = (syn.weight + delta).clamp(stdp.weight_min, stdp.weight_max);
+                                syn.weight =
+                                    (syn.weight + delta).clamp(stdp.weight_min, stdp.weight_max);
                                 trace.on_pre_spike(current_time, stdp.tau_plus);
 
                                 // Update eligibility trace for R-STDP
@@ -460,7 +524,8 @@ impl SimulationEngine {
                             if post_fired {
                                 // LTD: post before pre — weight decreases based on pre-trace
                                 let delta = -stdp.a_minus * trace.pre_trace;
-                                syn.weight = (syn.weight + delta).clamp(stdp.weight_min, stdp.weight_max);
+                                syn.weight =
+                                    (syn.weight + delta).clamp(stdp.weight_min, stdp.weight_max);
                                 trace.on_post_spike(current_time, stdp.tau_minus);
 
                                 if let Some(ref mut et) = syn.eligibility {
@@ -479,18 +544,18 @@ impl SimulationEngine {
                 }
 
                 // R-STDP: apply reward signal if output spikes exceed threshold
-                if self.plasticity.rstdp.is_some() && self.reward_signal.abs() > 0.001 {
+                if let Some(rstdp) = self.plasticity.rstdp.as_ref()
+                    && self.reward_signal.abs() > 0.001
+                {
                     for syn in net.synapses.iter_mut() {
                         if let Some(ref mut et) = syn.eligibility {
-                            if let Some(ref rstdp) = self.plasticity.rstdp {
-                                et.apply_reward(
-                                    self.reward_signal,
-                                    &mut syn.weight,
-                                    rstdp.learning_rate,
-                                    rstdp.weight_min,
-                                    rstdp.weight_max,
-                                );
-                            }
+                            et.apply_reward(
+                                self.reward_signal,
+                                &mut syn.weight,
+                                rstdp.learning_rate,
+                                rstdp.weight_min,
+                                rstdp.weight_max,
+                            );
                         }
                     }
                 }
@@ -517,17 +582,22 @@ impl SimulationEngine {
                                     count += 1;
                                 }
                             }
-                            if count == 0 || sum_contrib < 1e-12 { continue; }
+                            if count == 0 || sum_contrib < 1e-12 {
+                                continue;
+                            }
                             let mean_contrib = sum_contrib / count as f64;
 
                             for &idx in syn_indices {
-                                if idx >= n_syn { continue; }
+                                if idx >= n_syn {
+                                    continue;
+                                }
                                 let syn = &mut net.synapses[idx];
                                 // Over-contributing synapses feel more error, under-contributing less
                                 let rel_contrib = syn.contribution_avg / mean_contrib;
                                 let per_syn_error = error * rel_contrib;
                                 // Scale < 1.0 when over-firing (reduces weight)
-                                let scale = f64::exp(-per_syn_error * dt / self.plasticity.homeostatic_tau);
+                                let scale =
+                                    f64::exp(-per_syn_error * dt / self.plasticity.homeostatic_tau);
                                 syn.weight *= scale;
                                 syn.weight = syn.weight.clamp(0.0, 10.0);
                             }
@@ -561,23 +631,29 @@ impl SimulationEngine {
             }
             stats.weight_updates = spiked;
 
-            // Update firing rates (low-pass filter)
+            // Update firing rates (low-pass filter).
+            // `spike_set` (built earlier from spike_buffer) gives O(1) lookup,
+            // avoiding the O(n²) cost of `local_spiking.contains(&i)` per neuron.
             let n = self.firing_rates.len();
             for (i, rate) in self.firing_rates.iter_mut().enumerate() {
-                let spiked_here = local_spiking.contains(&i);
+                let spiked_here = spike_set.contains(&i);
                 let inst_freq = if spiked_here { 1000.0 / dt } else { 0.0 };
                 *rate += (inst_freq - *rate) * dt / 100.0;
             }
 
             stats.mean_firing_rate = if n > 0 {
                 self.firing_rates.iter().sum::<f64>() / n as f64
-            } else { 0.0 };
+            } else {
+                0.0
+            };
 
             // Synchrony index: fraction of neurons firing in the most active step
-            if let Some(hist) = self.spike_history.last()
-                && !hist.is_empty() {
-                    stats.synchrony_index = hist.iter().filter(|&&x| x).count() as f64 / hist.len() as f64;
-                }
+            if let Some(hist) = self.spike_history.back()
+                && !hist.is_empty()
+            {
+                stats.synchrony_index =
+                    hist.iter().filter(|&&x| x).count() as f64 / hist.len() as f64;
+            }
 
             // Weight statistics
             {
@@ -585,7 +661,8 @@ impl SimulationEngine {
                 let syns = &net.synapses;
                 if !syns.is_empty() {
                     let mean = syns.iter().map(|s| s.weight).sum::<f64>() / syns.len() as f64;
-                    let var = syns.iter().map(|s| (s.weight - mean).powi(2)).sum::<f64>() / syns.len() as f64;
+                    let var = syns.iter().map(|s| (s.weight - mean).powi(2)).sum::<f64>()
+                        / syns.len() as f64;
                     stats.weight_mean = mean;
                     stats.weight_std = var.sqrt();
                 }
@@ -602,21 +679,21 @@ impl SimulationEngine {
         }
     }
 
-    fn step_neuron(i: usize, state: &mut NeuronState, dt: f64,
-                   input_current: f64, model_params: &[NeuronModelParams]) -> bool {
-        // Gating state is now stored in NeuronState, so all models
-        // work as zero-sized types via the trait.
-        match &model_params[i] {
-            NeuronModelParams::Lif { .. } => {
-                LifNeuron.step(state, dt, input_current)
-            }
-            NeuronModelParams::Izhikevich { .. } => {
-                IzhikevichNeuron.step(state, dt, input_current)
-            }
+    fn step_neuron(state: &mut NeuronState, dt: f64, input_current: f64, sim_time: f64) -> bool {
+        // Dispatch to the appropriate model based on the stored parameters.
+        // Gating variables (HH) live in NeuronState and persist across steps.
+        let spiked = match state.model_params {
+            NeuronModelParams::Lif { .. } => LifNeuron.step(state, dt, input_current),
+            NeuronModelParams::Izhikevich { .. } => IzhikevichNeuron.step(state, dt, input_current),
             NeuronModelParams::HodgkinHuxley { .. } => {
                 HodgkinHuxleyNeuron.step(state, dt, input_current)
             }
+        };
+        // Stamp the absolute spike time so STDP and downstream consumers see real timestamps.
+        if spiked {
+            state.last_spike_time = sim_time;
         }
+        spiked
     }
 
     #[cfg(feature = "gpu")]
@@ -643,11 +720,17 @@ impl SimulationEngine {
                 let count = self.rng.random_range(5..=30);
                 for _ in 0..count {
                     let target = self.rng.random_range(0..n);
-                    net.neurons.input_current[target] += self.rng.random::<f64>() * self.external_stimulus_strength;
+                    net.neurons.input_current[target] +=
+                        self.rng.random::<f64>() * self.external_stimulus_strength;
                 }
             }
 
-            input_f32 = net.neurons.input_current.iter().map(|&v| v as f32).collect();
+            input_f32 = net
+                .neurons
+                .input_current
+                .iter()
+                .map(|&v| v as f32)
+                .collect();
         }
 
         let gpu = self.gpu_backend.as_mut().unwrap();
@@ -726,23 +809,16 @@ impl SimulationEngine {
     pub fn firing_rate(&self, neuron: usize) -> f64 {
         if neuron < self.firing_rates.len() {
             self.firing_rates[neuron]
-        } else { 0.0 }
-    }
-
-    /// Get a reference to the RNG for the current Rayon thread.
-    /// Falls back to the main rng if called outside the thread pool.
-    fn thread_rng(&mut self) -> &mut StdRng {
-        if let Some(idx) = rayon::current_thread_index() {
-            if idx < self.thread_rngs.len() {
-                return &mut self.thread_rngs[idx];
-            }
+        } else {
+            0.0
         }
-        &mut self.rng
     }
 
     /// Get mean firing rate across all neurons
     pub fn mean_firing_rate(&self) -> f64 {
-        if self.firing_rates.is_empty() { return 0.0; }
+        if self.firing_rates.is_empty() {
+            return 0.0;
+        }
         self.firing_rates.iter().sum::<f64>() / self.firing_rates.len() as f64
     }
 }
@@ -771,7 +847,10 @@ mod tests {
         let mut engine = SimulationEngine::new(network).with_noise(10.0);
         engine.simulate_ms(100.0);
         let stats = engine.stats();
-        assert!(stats.total_spikes > 0, "Engine should produce spikes with noise");
+        assert!(
+            stats.total_spikes > 0,
+            "Engine should produce spikes with noise"
+        );
     }
 
     #[test]
@@ -784,8 +863,7 @@ mod tests {
             syn.plasticity_enabled = true;
             syn.stdp_trace = Some(StdpTrace::new());
         }
-        let mut engine = SimulationEngine::new(network)
-            .with_noise(15.0);
+        let mut engine = SimulationEngine::new(network).with_noise(15.0);
         engine.simulate_ms(200.0);
         let stats = engine.stats();
         assert!(stats.total_spikes > 0);
