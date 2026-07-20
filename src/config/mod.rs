@@ -1,3 +1,15 @@
+//! YAML/JSON configuration loading for simulations.
+//!
+//! A `SimConfig` describes the network topology (regions + connections),
+//! simulation parameters (dt, duration, noise), plasticity rules, and I/O
+//! settings. Load via [`SimConfig::from_file`]:
+//!
+//! ```no_run
+//! use neural_sim::config::SimConfig;
+//! let cfg = SimConfig::from_file("brain.yaml").expect("failed to load config");
+//! ```
+
+use crate::error::{NeuralSimError, Result};
 use crate::neuron::NeuronModelParams;
 use crate::synapse::PlasticityConfig;
 use serde::Deserialize;
@@ -71,27 +83,42 @@ pub struct TextIoConfig {
 
 impl SimConfig {
     /// Load config from a YAML file path.
-    pub fn from_yaml(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let contents = std::fs::read_to_string(path)?;
+    pub fn from_yaml(path: &str) -> Result<Self> {
+        let contents = std::fs::read_to_string(path).map_err(|e| {
+            NeuralSimError::io(
+                "failed to read YAML config",
+                Some(std::path::PathBuf::from(path)),
+                e,
+            )
+        })?;
         let config: SimConfig = serde_yaml::from_str(&contents)?;
         Ok(config)
     }
 
     /// Load config from a JSON file path.
-    pub fn from_json(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let contents = std::fs::read_to_string(path)?;
+    pub fn from_json(path: &str) -> Result<Self> {
+        let contents = std::fs::read_to_string(path).map_err(|e| {
+            NeuralSimError::io(
+                "failed to read JSON config",
+                Some(std::path::PathBuf::from(path)),
+                e,
+            )
+        })?;
         let config: SimConfig = serde_json::from_str(&contents)?;
         Ok(config)
     }
 
     /// Detect format by extension and load.
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_file(path: &str) -> Result<Self> {
         if path.ends_with(".yaml") || path.ends_with(".yml") {
             Self::from_yaml(path)
         } else if path.ends_with(".json") {
             Self::from_json(path)
         } else {
-            Err(format!("Unknown config format: {}. Use .yaml, .yml, or .json", path).into())
+            Err(NeuralSimError::Config(format!(
+                "Unknown config format: {}. Use .yaml, .yml, or .json",
+                path
+            )))
         }
     }
 
@@ -102,11 +129,22 @@ impl SimConfig {
 
     /// Get a builder-friendly list of regions from the config.
     pub fn region_specs(&self) -> Vec<(String, usize, f64, NeuronModelParams, bool, bool)> {
-        self.network.regions.iter().map(|r| {
-            let exc_ratio = r.excitatory_ratio.unwrap_or(0.8);
-            let params = r.model_params.unwrap_or(NeuronModelParams::default());
-            (r.name.clone(), r.neuron_count, exc_ratio, params, r.is_input.unwrap_or(false), r.is_output.unwrap_or(false))
-        }).collect()
+        self.network
+            .regions
+            .iter()
+            .map(|r| {
+                let exc_ratio = r.excitatory_ratio.unwrap_or(0.8);
+                let params = r.model_params.unwrap_or(NeuronModelParams::default());
+                (
+                    r.name.clone(),
+                    r.neuron_count,
+                    exc_ratio,
+                    params,
+                    r.is_input.unwrap_or(false),
+                    r.is_output.unwrap_or(false),
+                )
+            })
+            .collect()
     }
 
     pub fn dt_ms(&self) -> f64 {
