@@ -1,3 +1,7 @@
+pub use crate::evolution::{
+    CrossoverMode, EvolutionConfig, FitnessEvaluator, GenerationStats, Genome, MutationConfig,
+    Population, RateHomeostasis, RewardAccumulation,
+};
 pub use crate::io::{text::TextDecoder, text::TextEncoder};
 pub use crate::network::builder::BrainBuilder;
 pub use crate::network::connectivity::ConnectivityPattern;

@@ -68,7 +68,7 @@ impl NeuronState {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum NeuronModelParams {
     /// Leaky Integrate-and-Fire: { resting, threshold, reset, tau_m, refractory_period }
     Lif {

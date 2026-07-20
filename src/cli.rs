@@ -41,10 +41,31 @@ pub struct CliArgs {
     /// Override the simulation RNG seed.
     #[arg(long)]
     pub seed: Option<u64>,
+
+    /// Run evolutionary optimization instead of a single simulation.
+    #[arg(long)]
+    pub evolve: bool,
+
+    /// Number of generations to evolve (with --evolve).
+    #[arg(long, default_value = "50")]
+    pub generations: usize,
+
+    /// Population size for evolution (with --evolve).
+    #[arg(long, default_value = "30")]
+    pub population: usize,
+
+    /// Enable Lamarckian inheritance (lifetime-learned weights passed to offspring).
+    #[arg(long)]
+    pub lamarckian: bool,
 }
 
 /// Top-level entry point invoked by `main` when the GUI is not used.
 pub fn run(args: CliArgs) {
+    if args.evolve {
+        run_evolution(&args);
+        return;
+    }
+
     print_banner();
 
     let (sim_config, network, plasticity, sim_duration, dt) = build_network(&args);
@@ -375,5 +396,69 @@ fn print_footer(
     println!("║  Run with --cli for terminal mode.              ║");
     println!("║  Run with --features gpu for GPU acceleration.  ║");
     println!("║  Run with --config <file.yaml> for config.      ║");
+    println!("╚══════════════════════════════════════════════════╝");
+}
+
+/// Run evolutionary optimization.
+fn run_evolution(args: &CliArgs) {
+    use neural_sim::evolution::{EvolutionConfig, FitnessEvaluator, Population, RateHomeostasis};
+
+    println!("╔══════════════════════════════════════════════════╗");
+    println!("║         NeuralSim — Evolutionary Mode             ║");
+    println!("╚══════════════════════════════════════════════════╝");
+    println!();
+
+    let config = EvolutionConfig {
+        lamarckian: args.lamarckian,
+        seed: args.seed.unwrap_or(42),
+        ..Default::default()
+    };
+
+    let evaluator = RateHomeostasis::new(5.0).with_lifetime(300.0);
+
+    println!("  Population:   {}", args.population);
+    println!("  Generations:  {}", args.generations);
+    println!("  Lamarckian:   {}", config.lamarckian);
+    println!("  Fitness task: {} (target 5 Hz)", evaluator.name());
+    println!();
+
+    let mut pop = Population::random(args.population, &config);
+
+    println!("  Gen |   Best   |   Mean   |   Worst  |    Std   | Diversity");
+    println!("  ----+----------+----------+----------+----------+----------");
+
+    for generation in 0..args.generations {
+        let _best = pop.evolve_generation(&evaluator, &config);
+        let stats = pop.history.last().expect("history");
+        println!(
+            "  {:>3} | {:>8.4} | {:>8.4} | {:>8.4} | {:>8.4} | {:>8.2}",
+            generation,
+            stats.best_fitness,
+            stats.mean_fitness,
+            stats.worst_fitness,
+            stats.fitness_std,
+            stats.diversity,
+        );
+    }
+
+    // Save results
+    let csv_path = "/tmp/neural_sim_evolution.csv";
+    let _ = pop.save_history_csv(csv_path);
+    println!();
+    println!("  Evolution history saved to {}", csv_path);
+
+    if let Some(_best_genome) = &pop.best_genome {
+        let json_path = "/tmp/neural_sim_best_genome.json";
+        let _ = pop.save_best_genome(json_path);
+        println!(
+            "  Best genome saved to {} (fitness: {:.4})",
+            json_path, pop.best_fitness
+        );
+    }
+
+    println!();
+    println!("╔══════════════════════════════════════════════════╗");
+    println!("║  Evolution complete.                              ║");
+    println!("║  Run with --lamarckian for Lamarckian inheritance║");
     println!("╚══════════════════════════════════════════════════╝");
 }

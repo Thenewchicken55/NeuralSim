@@ -31,6 +31,7 @@
 
 pub mod config;
 pub mod error;
+pub mod evolution;
 pub mod io;
 pub mod network;
 pub mod neuron;
