@@ -24,7 +24,10 @@ thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 
 # Optional GUI
-eframe = { version = "0.34", optional = true, default-features = false, features = ["default_fonts", "glow"] }
+# `x11` and `wayland` are required for Linux; they're on by default in eframe
+# but we list them explicitly since we set default-features = false to avoid
+# pulling in eframe's "accesskit" / "puffin" extras we don't use.
+eframe = { version = "0.34", optional = true, default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 
 # Optional GPU compute backend
 wgpu = { version = "22", optional = true }
