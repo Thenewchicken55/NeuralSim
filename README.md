@@ -7,27 +7,27 @@ NeuralSim is a high-performance, massively scalable simulator for spiking neural
 ## Features
 
 - **Single-neuron resolution** — Every neuron is an independent computational unit with membrane potential, firing threshold, refractory period, and multiple built-in models (LIF, Izhikevich, Hodgkin-Huxley)
-- **Synaptic plasticity** — Spike-timing-dependent plasticity (STDP), short-term depression/facilitation, and homeostatic scaling
+- **Synaptic plasticity** — Spike-timing-dependent plasticity (STDP), triplet STDP, R-STDP (reward-modulated), BCM, short-term depression/facilitation, homeostatic scaling, intrinsic plasticity, and synaptic consolidation
 - **Real brain architecture** — Modular brain regions (cortical columns, thalamocortical loops, hippocampus), configurable excitatory/inhibitory ratios (80/20), layer-specific connectivity patterns
-- **Massive scalability** — Written in Rust with zero-cost abstractions, SIMD optimizations, and lock-free concurrency. Designed to simulate millions of neurons on consumer hardware and billions on clusters
-- **Bare-metal performance** — No runtime overhead, cache-friendly memory layouts (AoS → SoA), CSR adjacency matrices, optional GPU compute shader backend
-- **Optional GUI** — Real-time 3D visualization of network activity, spike raster plots, membrane potential traces, and interactive neuron inspection powered by `egui`
-- **Deterministic simulation** — Reproducible results with seeded RNG for scientific use
-- **Serialization** — Save/load full network state, configurable checkpoints, JSON export for analysis
+- **Massive scalability** — Written in Rust with zero-cost abstractions, lock-free concurrency (rayon), and cache-friendly SoA memory layouts. Designed to simulate millions of neurons on consumer hardware
+- **Bare-metal performance** — CSR adjacency matrices, split-borrow SoA parallel updates, optional GPU compute shader backend (wgpu)
+- **Optional GUI** — Real-time visualization of network activity, spike raster plots, membrane potential traces, and interactive neuron inspection powered by `egui`
+- **Deterministic simulation** — Reproducible results with seeded RNG for scientific use; seed recorded in checkpoint metadata
+- **Serialization** — Save/load full network state (JSON), configurable checkpoints with pruning, CSV stats export, text↔spike I/O pipeline
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────┐
 │                 GUI Layer                    │
-│  (egui + 3D visualization, optional)        │
+│  (egui + brain visualization, optional)      │
 ├─────────────────────────────────────────────┤
 │           Simulation Engine                  │
 │  ┌─────────┐ ┌─────────┐ ┌───────────────┐ │
 │  │Neuron   │ │Synapse  │ │Plasticity     │ │
 │  │Models   │ │Dynamics │ │Rules (STDP,   │ │
-│  │(LIF, HH,│ │(AMPA,   │ │BCM, triplet)  │ │
-│  │Izhikevich)│GABA, NMDA)│ │               │ │
+│  │(LIF, HH,│ │(AMPA,   │ │BCM, triplet,  │ │
+│  │Izhikevich)│GABA, NMDA)│ R-STDP, homeo) │ │
 │  └─────────┘ └─────────┘ └───────────────┘ │
 ├─────────────────────────────────────────────┤
 │         Data Layer (SoA, CSR, pools)        │
@@ -53,15 +53,15 @@ NeuralSim is a high-performance, massively scalable simulator for spiking neural
 |------|-----------|----------|
 | AMPA | ~2 ms | Fast excitation |
 | GABA | ~10 ms | Fast inhibition |
-| NMDA | ~100 ms | Slow excitation, plasticity |
+| GABA-B | ~150 ms | Slow metabotropic inhibition |
+| NMDA | ~100 ms | Slow excitation, voltage-gated (Mg²⁺ block), plasticity |
 
 ### Brain Region Templates
 
 - Cortical column (6 layers, layer-specific connectivity)
 - Thalamocortical loop
 - Hippocampal formation (DG → CA3 → CA1)
-- Basal ganglia circuit
-- Custom user-defined regions via JSON config
+- Custom user-defined regions via JSON/YAML config
 
 ## Installation
 
@@ -78,33 +78,86 @@ git clone https://github.com/Thenewchicken55/NeuralSim.git
 cd NeuralSim
 cargo build --release
 
-# Run headless
-cargo run --release
+# Run headless CLI demo
+cargo run --release --no-default-features -- --cli
 
 # Run with GPU acceleration
-cargo run --release --features gpu
+cargo run --release --no-default-features --features gpu -- --cli
 
-# Run with GUI + GPU
-cargo run --release --features "gpu,gui"
+# Run with GUI (default features)
+cargo run --release
 ```
 
 ### Quick Example
 
 ```rust
-use neural_sim::prelude::*;
+use neural_sim::network::builder::BrainBuilder;
+use neural_sim::neuron::NeuronModelParams;
+use neural_sim::simulation::SimulationEngine;
+use neural_sim::synapse::PlasticityConfig;
+use neural_sim::synapse::plasticity::{StdpRule, ConsolidationRule, IntrinsicPlasticity};
 
 fn main() {
-    // Create a cortical column with 10,000 neurons
-    let mut column = CorticalColumn::builder()
-        .excitatory_ratio(0.8)
-        .build(10_000);
+    let izh = NeuronModelParams::Izhikevich { a: 0.02, b: 0.2, c: -65.0, d: 8.0 };
+
+    // Build a multi-region brain
+    let network = BrainBuilder::new()
+        .with_name("DemoBrain")
+        .with_plasticity(true)
+        .add_region("Input", 100, 0.80, izh)
+        .mark_input("Input")
+        .add_cortical_column("V1", 500)
+        .add_region("Output", 100, 0.80, izh)
+        .mark_output("Output")
+        .connect_regions("Input", "V1", 0.03, 1.0, None)
+        .connect_regions("V1", "Output", 0.03, 1.0, None)
+        .build();
+
+    let plasticity = PlasticityConfig {
+        stdp: Some(StdpRule::default()),
+        consolidation: Some(ConsolidationRule::default()),
+        intrinsic: Some(IntrinsicPlasticity::default()),
+        enabled: true,
+        homeostatic_target_rate: 5.0,
+        homeostatic_tau: 5000.0,
+        ..Default::default()
+    };
+
+    let mut engine = SimulationEngine::new(network)
+        .with_noise(10.0)
+        .with_plasticity(plasticity)
+        .with_conductance(true);
+
+    // Enable plasticity on existing synapses
+    {
+        let mut net = engine.network.write();
+        for syn in net.synapses.iter_mut() {
+            *syn = syn.clone().with_plasticity();
+        }
+    }
 
     // Simulate 1000 ms of activity
-    column.simulate_ms(1000.0);
+    engine.simulate_ms(1000.0);
 
     // Inspect spike activity
-    println!("Total spikes: {}", column.spike_count());
+    let stats = engine.stats();
+    println!("Total spikes:  {}", stats.total_spikes);
+    println!("Output spikes: {}", stats.output_spikes);
+    println!("Mean rate:     {:.1} Hz", stats.mean_firing_rate);
 }
+```
+
+See `examples/hello_brain.rs`, `examples/neuron_models.rs`, and `examples/stdp_learning.rs`
+for more runnable examples.
+
+## CLI
+
+```sh
+neural_sim                 # launch GUI (if built with the `gui` feature)
+neural_sim --cli           # run the headless demo pipeline
+neural_sim --cli --seed 7  # override the RNG seed
+neural_sim --cli -c brain.yaml   # run from a YAML/JSON config
+neural_sim --help          # full option list
 ```
 
 ## Performance Goals
@@ -114,41 +167,29 @@ fn main() {
 | Small | 10k | 1M | ~50 MB | >1000x realtime |
 | Medium | 1M | 100M | ~2 GB | >10x realtime |
 | Large | 100M | 10B | ~200 GB | ~1x realtime |
-| Cluster | 1B+ | 100B+ | Distributed | ~1x realtime |
 
 ## Project Structure
 
 ```
 src/
 ├── main.rs                  # Entry point (GUI or CLI)
-├── neuron/                  # Neuron models
-│   ├── mod.rs
-│   ├── lif.rs               # Leaky Integrate-and-Fire
-│   ├── izhikevich.rs        # Izhikevich model
-│   └── hodgkin_huxley.rs    # Hodgkin-Huxley model
-├── synapse/                 # Synaptic dynamics
-│   ├── mod.rs
-│   ├── types.rs             # AMPA, GABA, NMDA
-│   └── plasticity.rs        # STDP, BCM, triplet rules
-├── network/                 # Network topology
-│   ├── mod.rs
-│   ├── graph.rs             # Adjacency (CSR format)
-│   ├── region.rs            # Brain region templates
-│   └── connectivity.rs      # Connectivity patterns
-├── simulation/              # Simulation engine
-│   ├── mod.rs
-│   ├── engine.rs            # Parallel tick execution
-│   └── scheduler.rs         # Event scheduling
-├── io/                      # Serialization
-│   ├── mod.rs
-│   ├── save.rs
-│   └── load.rs
-├── gui/                     # GUI (optional, behind feature flag)
-│   ├── mod.rs
-│   ├── app.rs               # egui application
-│   └── viz.rs               # 3D visualization
-└── prelude.rs               # Re-exports
+├── cli.rs                   # clap-based CLI + phased demo pipeline
+├── gui_entry.rs             # Wires up the GUI when `gui` is on
+├── error.rs                 # NeuralSimError / Result aliases
+├── prelude.rs               # Convenience re-exports
+├── config/                  # YAML/JSON config loading
+├── neuron/                  # Neuron models (LIF, Izhikevich, HH)
+├── synapse/                 # Synapse types, dynamics, plasticity rules
+├── network/                 # CSR graph, brain builder, region templates
+├── simulation/              # Engine, scheduler, GPU backend + shaders
+├── io/                      # Save/load, checkpointing, text I/O
+└── gui/                     # egui app + brain visualization
+examples/                    # Runnable examples (hello_brain, neuron_models, stdp_learning)
+benches/                     # criterion benchmarks
+tests/                       # integration tests
 ```
+
+See `AGENTS.md` for build/test commands and conventions for contributors.
 
 ## Research Foundations
 

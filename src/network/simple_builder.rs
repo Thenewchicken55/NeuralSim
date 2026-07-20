@@ -1,6 +1,6 @@
-use crate::neuron::NeuronModelParams;
-use crate::network::builder::BrainBuilder;
 use crate::network::Network;
+use crate::network::builder::BrainBuilder;
+use crate::neuron::NeuronModelParams;
 
 /// Simple builder wrapping BrainBuilder for quick setup.
 pub struct NetworkBuilder {
@@ -10,7 +10,10 @@ pub struct NetworkBuilder {
 
 impl NetworkBuilder {
     pub fn new(size: usize) -> Self {
-        Self { size, use_layers: false }
+        Self {
+            size,
+            use_layers: false,
+        }
     }
 
     pub fn with_default_layers(mut self) -> Self {

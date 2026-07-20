@@ -1,5 +1,18 @@
-pub mod types;
+//! Synapse types, conductance dynamics, and plasticity rules.
+//!
+//! # Synapse types
+//! - AMPA — fast excitation (~2 ms decay)
+//! - GABA — fast inhibition (~10 ms decay)
+//! - GABA-B — slow metabotropic inhibition (~150 ms decay)
+//! - NMDA — slow excitation with voltage-dependent Mg²⁺ block (~100 ms decay)
+//!
+//! # Plasticity
+//! See the [`plasticity`] submodule for STDP, triplet STDP, R-STDP, BCM,
+//! short-term plasticity, homeostatic scaling, intrinsic plasticity, and
+//! synaptic consolidation.
+
 pub mod plasticity;
+pub mod types;
 
 use plasticity::StdpTrace;
 use serde::{Deserialize, Serialize};
@@ -34,7 +47,11 @@ impl Default for ConductanceState {
 
 impl ConductanceState {
     pub fn new() -> Self {
-        Self { g: 0.0, t_since_spike: 0.0, pending_spike: false }
+        Self {
+            g: 0.0,
+            t_since_spike: 0.0,
+            pending_spike: false,
+        }
     }
 }
 
@@ -88,7 +105,9 @@ impl SynapseState {
     }
 
     pub fn with_stp(mut self, u_se: f64, tau_rec: f64, tau_facil: f64) -> Self {
-        self.stp = Some(plasticity::ShortTermPlasticity::new(u_se, tau_rec, tau_facil));
+        self.stp = Some(plasticity::ShortTermPlasticity::new(
+            u_se, tau_rec, tau_facil,
+        ));
         self
     }
 
@@ -117,7 +136,9 @@ pub struct PlasticityConfig {
     pub contribution_tau: f64,
 }
 
-fn default_contribution_tau() -> f64 { 1000.0 }
+fn default_contribution_tau() -> f64 {
+    1000.0
+}
 
 impl Default for PlasticityConfig {
     fn default() -> Self {

@@ -20,8 +20,7 @@ impl NeuronModel for LifNeuron {
             _ => return false,
         };
 
-        let (resting, threshold, reset, tau_m, refractory_period, input_resistance) = match params
-        {
+        let (resting, threshold, reset, tau_m, refractory_period, input_resistance) = match params {
             NeuronModelParams::Lif {
                 resting,
                 threshold,
@@ -29,7 +28,14 @@ impl NeuronModel for LifNeuron {
                 tau_m,
                 refractory_period,
                 input_resistance,
-            } => (*resting, *threshold, *reset, *tau_m, *refractory_period, *input_resistance),
+            } => (
+                *resting,
+                *threshold,
+                *reset,
+                *tau_m,
+                *refractory_period,
+                *input_resistance,
+            ),
             _ => unreachable!(),
         };
 
@@ -38,7 +44,8 @@ impl NeuronModel for LifNeuron {
             return false;
         }
 
-        let dv = (-(state.membrane_potential - resting) + input_resistance * input_current) * dt / tau_m;
+        let dv =
+            (-(state.membrane_potential - resting) + input_resistance * input_current) * dt / tau_m;
         state.membrane_potential += dv;
 
         if state.membrane_potential >= threshold {

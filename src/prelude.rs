@@ -1,20 +1,19 @@
+pub use crate::io::{text::TextDecoder, text::TextEncoder};
+pub use crate::network::builder::BrainBuilder;
+pub use crate::network::connectivity::ConnectivityPattern;
+pub use crate::network::region::RegionTemplate;
+pub use crate::network::{Network, RegionId};
 pub use crate::neuron::{
-    lif::LifNeuron, izhikevich::IzhikevichNeuron, hodgkin_huxley::HodgkinHuxleyNeuron,
-    NeuronId, NeuronModel, NeuronState, NeuronType, NeuronModelParams, NeuronArray,
+    NeuronArray, NeuronId, NeuronModel, NeuronModelParams, NeuronState, NeuronType,
+    hodgkin_huxley::HodgkinHuxleyNeuron, izhikevich::IzhikevichNeuron, lif::LifNeuron,
 };
+pub use crate::simulation::scheduler::{Scheduler, SimSpeed};
+pub use crate::simulation::{SimulationEngine, SimulationStats, StepResult};
 pub use crate::synapse::{
-    SynapseId, SynapseType, SynapseState, PlasticityConfig,
+    PlasticityConfig, SynapseId, SynapseState, SynapseType,
     plasticity::{
-        StdpRule, TripletStdpRule, ShortTermPlasticity,
-        StdpTrace, EligibilityTrace, RStdpRule, BcmRule,
-        ConsolidationRule, IntrinsicPlasticity,
+        BcmRule, ConsolidationRule, EligibilityTrace, IntrinsicPlasticity, RStdpRule,
+        ShortTermPlasticity, StdpRule, StdpTrace, TripletStdpRule,
     },
     types::SynapseDynamics,
 };
-pub use crate::network::{Network, RegionId};
-pub use crate::network::builder::BrainBuilder;
-pub use crate::network::region::RegionTemplate;
-pub use crate::network::connectivity::ConnectivityPattern;
-pub use crate::simulation::{SimulationEngine, SimulationStats, StepResult};
-pub use crate::simulation::scheduler::{Scheduler, SimSpeed};
-pub use crate::io::{text::TextEncoder, text::TextDecoder};

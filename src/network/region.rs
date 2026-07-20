@@ -22,9 +22,7 @@ pub struct LayerConfig {
 /// Pre-built brain region templates based on known neuroanatomy
 pub enum RegionTemplate {
     /// 6-layer cortical column with layer-specific connectivity
-    CorticalColumn {
-        total_neurons: usize,
-    },
+    CorticalColumn { total_neurons: usize },
     /// Thalamus <-> Cortex loop
     ThalamocorticalLoop {
         thalamus_size: usize,
@@ -79,7 +77,10 @@ impl RegionTemplate {
                     },
                 ]
             }
-            Self::ThalamocorticalLoop { thalamus_size, cortex_size } => {
+            Self::ThalamocorticalLoop {
+                thalamus_size,
+                cortex_size,
+            } => {
                 vec![
                     RegionConfig {
                         name: "Thalamus".into(),
@@ -97,7 +98,11 @@ impl RegionTemplate {
                     },
                 ]
             }
-            Self::HippocampalFormation { dg_size, ca3_size, ca1_size } => {
+            Self::HippocampalFormation {
+                dg_size,
+                ca3_size,
+                ca1_size,
+            } => {
                 vec![
                     RegionConfig {
                         name: "DG".into(),

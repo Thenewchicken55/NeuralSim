@@ -134,10 +134,18 @@ mod tests {
         let dyns = SynapseDynamics::nmda();
         // At depolarized potential (+20mV), channels should be mostly unblocked
         let unblocked = dyns.nmda_mg_block(20.0);
-        assert!(unblocked > 0.7, "NMDA should be mostly unblocked at +20mV, got {:.3}", unblocked);
+        assert!(
+            unblocked > 0.7,
+            "NMDA should be mostly unblocked at +20mV, got {:.3}",
+            unblocked
+        );
         // At hyperpolarized potential (-80mV), channels should be mostly blocked
         let blocked = dyns.nmda_mg_block(-80.0);
-        assert!(blocked < 0.3, "NMDA should be mostly blocked at -80mV, got {:.3}", blocked);
+        assert!(
+            blocked < 0.3,
+            "NMDA should be mostly blocked at -80mV, got {:.3}",
+            blocked
+        );
     }
 
     #[test]
@@ -145,8 +153,16 @@ mod tests {
         let dyns = SynapseDynamics::nmda();
         // At resting potential around -65mV, NMDA should be significantly blocked
         let blocked = dyns.nmda_mg_block(-65.0);
-        assert!(blocked < 0.5, "NMDA should be significantly blocked at rest, got {:.3}", blocked);
-        assert!(blocked > 0.01, "NMDA should not be fully blocked at rest, got {:.3}", blocked);
+        assert!(
+            blocked < 0.5,
+            "NMDA should be significantly blocked at rest, got {:.3}",
+            blocked
+        );
+        assert!(
+            blocked > 0.01,
+            "NMDA should not be fully blocked at rest, got {:.3}",
+            blocked
+        );
     }
 
     #[test]
@@ -155,11 +171,21 @@ mod tests {
         // GABA-B peaks later than AMPA — at t=30ms, g should be > at t=1ms
         let g_peak = dyns.conductance(30.0);
         let g_early = dyns.conductance(1.0);
-        assert!(g_peak > g_early, "GABA-B at 30ms ({:.4}) should be > at 1ms ({:.4})", g_peak, g_early);
+        assert!(
+            g_peak > g_early,
+            "GABA-B at 30ms ({:.4}) should be > at 1ms ({:.4})",
+            g_peak,
+            g_early
+        );
         // Should peak somewhere reasonable
         let g_mid = dyns.conductance(60.0);
         let g_late = dyns.conductance(300.0);
-        assert!(g_mid > g_late, "GABA-B should decay after peak: 60ms={:.4} > 300ms={:.4}", g_mid, g_late);
+        assert!(
+            g_mid > g_late,
+            "GABA-B should decay after peak: 60ms={:.4} > 300ms={:.4}",
+            g_mid,
+            g_late
+        );
     }
 
     #[test]
@@ -169,7 +195,11 @@ mod tests {
         let t_peak = (dyns.rise_time * dyns.decay_time / (dyns.decay_time - dyns.rise_time))
             * (dyns.decay_time / dyns.rise_time).ln();
         let g_peak = dyns.conductance(t_peak);
-        assert!((g_peak - dyns.conductance_max).abs() < 0.01,
-            "Peak conductance should be close to g_max, got {:.4} vs {:.4}", g_peak, dyns.conductance_max);
+        assert!(
+            (g_peak - dyns.conductance_max).abs() < 0.01,
+            "Peak conductance should be close to g_max, got {:.4} vs {:.4}",
+            g_peak,
+            dyns.conductance_max
+        );
     }
 }

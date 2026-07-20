@@ -1,6 +1,17 @@
-pub mod lif;
-pub mod izhikevich;
+//! Neuron models and SoA storage.
+//!
+//! Three biologically-motivated models are provided:
+//! - [`lif::LifNeuron`] — Leaky Integrate-and-Fire, fastest, medium fidelity
+//! - [`izhikevich::IzhikevichNeuron`] — Izhikevich model, good speed/realism tradeoff
+//! - [`hodgkin_huxley::HodgkinHuxleyNeuron`] — full conductance-based HH model
+//!
+//! All models implement the [`NeuronModel`] trait and operate on [`NeuronState`].
+//! The canonical storage is [`NeuronArray`] (Struct of Arrays) for cache-friendly
+//! bulk updates in the simulation engine.
+
 pub mod hodgkin_huxley;
+pub mod izhikevich;
+pub mod lif;
 
 use serde::{Deserialize, Serialize};
 
@@ -69,12 +80,7 @@ pub enum NeuronModelParams {
         input_resistance: f64,
     },
     /// Izhikevich: { a, b, c, d }
-    Izhikevich {
-        a: f64,
-        b: f64,
-        c: f64,
-        d: f64,
-    },
+    Izhikevich { a: f64, b: f64, c: f64, d: f64 },
     /// Hodgkin-Huxley: full conductance-based model params
     HodgkinHuxley {
         g_na: f64,

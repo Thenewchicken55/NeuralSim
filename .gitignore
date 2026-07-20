@@ -13,12 +13,11 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# Simulation output
-*.json
-*.bin
-*.pool
+# Simulation output (only generated artifacts — keep example configs)
 checkpoints/
 logs/
+*.bin
+*.pool
 
 # Environment
 .env

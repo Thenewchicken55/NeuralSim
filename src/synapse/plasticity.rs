@@ -92,7 +92,13 @@ pub struct ShortTermPlasticity {
 
 impl ShortTermPlasticity {
     pub fn new(u_se: f64, tau_rec: f64, tau_facil: f64) -> Self {
-        Self { u_se, tau_rec, tau_facil, u: u_se, r: 1.0 }
+        Self {
+            u_se,
+            tau_rec,
+            tau_facil,
+            u: u_se,
+            r: 1.0,
+        }
     }
 
     pub fn step(&mut self, dt: f64, spike: bool) -> f64 {

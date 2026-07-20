@@ -149,12 +149,16 @@ mod tests {
         // After one step without input, gating should change slightly
         let (m0, h0, n0) = (state.hh_m, state.hh_h, state.hh_n);
         let _ = neuron.step(&mut state, 0.1, 0.0);
-        assert!(state.hh_m != m0 || state.hh_h != h0 || state.hh_n != n0,
-            "HH gating variables should change after a step");
+        assert!(
+            state.hh_m != m0 || state.hh_h != h0 || state.hh_n != n0,
+            "HH gating variables should change after a step"
+        );
         // After another step, variables should continue evolving (not reset)
         let (m1, h1, n1) = (state.hh_m, state.hh_h, state.hh_n);
         let _ = neuron.step(&mut state, 0.1, 0.0);
-        assert!(state.hh_m != m1 || state.hh_h != h1 || state.hh_n != n1,
-            "HH gating variables should continue evolving across steps");
+        assert!(
+            state.hh_m != m1 || state.hh_h != h1 || state.hh_n != n1,
+            "HH gating variables should continue evolving across steps"
+        );
     }
 }

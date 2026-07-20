@@ -1,11 +1,9 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use neural_sim::network::NetworkBuilder;
 use neural_sim::simulation::engine::SimulationEngine;
 
 fn bench_step_throughput(c: &mut Criterion) {
-    let net = NetworkBuilder::new(1000)
-        .with_default_layers()
-        .build();
+    let net = NetworkBuilder::new(1000).with_default_layers().build();
     let mut engine = SimulationEngine::new(net);
 
     c.bench_function("step_1000_neurons", |b| {
@@ -16,9 +14,7 @@ fn bench_step_throughput(c: &mut Criterion) {
 }
 
 fn bench_plasticity_throughput(c: &mut Criterion) {
-    let net = NetworkBuilder::new(500)
-        .with_default_layers()
-        .build();
+    let net = NetworkBuilder::new(500).with_default_layers().build();
     let mut engine = SimulationEngine::new(net);
 
     // Run a few steps to build up spike activity
@@ -36,9 +32,7 @@ fn bench_plasticity_throughput(c: &mut Criterion) {
 fn bench_network_build(c: &mut Criterion) {
     c.bench_function("build_network_10000", |b| {
         b.iter(|| {
-            let net = NetworkBuilder::new(10000)
-                .with_default_layers()
-                .build();
+            let net = NetworkBuilder::new(10000).with_default_layers().build();
             black_box(net);
         })
     });

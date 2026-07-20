@@ -2,6 +2,7 @@
 pub fn run() {
     use neural_sim::gui::NeuralSimApp;
     use neural_sim::network::Network;
+    use neural_sim::simulation::SimulationEngine;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 

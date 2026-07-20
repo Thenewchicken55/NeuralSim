@@ -1,7 +1,28 @@
+//! Network topology, brain-region construction, and CSR adjacency storage.
+//!
+//! # Building a network
+//! Use [`builder::BrainBuilder`] to construct multi-region networks with
+//! realistic connectivity:
+//!
+//! ```no_run
+//! use neural_sim::network::builder::BrainBuilder;
+//! use neural_sim::neuron::NeuronModelParams;
+//!
+//! let net = BrainBuilder::new()
+//!     .add_region("Cortex", 1000, 0.80, NeuronModelParams::default())
+//!     .add_cortical_column("V1", 500)
+//!     .connect_regions("Cortex", "V1", 0.05, 1.0, None)
+//!     .build();
+//! ```
+//!
+//! # Storage
+//! Synapses are stored as a flat `Vec<SynapseState>` with a CSR adjacency
+//! (`adjacency_ptr` + `adjacency_indices`) built by [`Network::finalize`].
+
+pub mod builder;
+pub mod connectivity;
 pub mod graph;
 pub mod region;
-pub mod connectivity;
-pub mod builder;
 pub mod simple_builder;
 
 pub use simple_builder::NetworkBuilder;
@@ -93,7 +114,11 @@ impl Network {
                         NeuronType::Excitatory => SynapseType::AMPA,
                         NeuronType::Inhibitory => SynapseType::GABA,
                     };
-                    let weight = if syn_type == SynapseType::GABA { -rng.random::<f64>() * 2.0 } else { rng.random::<f64>() * 3.0 + 1.0 };
+                    let weight = if syn_type == SynapseType::GABA {
+                        -rng.random::<f64>() * 2.0
+                    } else {
+                        rng.random::<f64>() * 3.0 + 1.0
+                    };
                     self.add_synapse(SynapseState::new(i, j, weight, syn_type));
                 }
             }
@@ -112,9 +137,11 @@ impl Network {
                 spike_counts[rid] += self.neurons.spike_count[i];
             }
         }
-        self.region_names.iter().enumerate().map(|(i, name)| {
-            (name.clone(), neuron_counts[i], spike_counts[i] as usize)
-        }).collect()
+        self.region_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), neuron_counts[i], spike_counts[i] as usize))
+            .collect()
     }
 
     /// Compute mean firing rate per region
@@ -129,11 +156,17 @@ impl Network {
             }
         }
         let t = self.time.max(0.001);
-        self.region_names.iter().enumerate().map(|(i, name)| {
-            let rate = if neuron_counts[i] > 0 {
-                spike_counts[i] as f64 / neuron_counts[i] as f64 / (t / 1000.0)
-            } else { 0.0 };
-            (name.clone(), rate)
-        }).collect()
+        self.region_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let rate = if neuron_counts[i] > 0 {
+                    spike_counts[i] as f64 / neuron_counts[i] as f64 / (t / 1000.0)
+                } else {
+                    0.0
+                };
+                (name.clone(), rate)
+            })
+            .collect()
     }
 }
