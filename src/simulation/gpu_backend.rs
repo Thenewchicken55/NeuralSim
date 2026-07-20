@@ -1,3 +1,10 @@
+//! GPU compute backend for the simulation.
+//!
+//! The wgpu API naturally produces deeply nested types and long argument
+//! lists, so we silence the corresponding clippy lints at the module level.
+
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 use std::borrow::Cow;
 
 const LIF_SHADER_SOURCE: &str = include_str!("shaders/lif_update.wgsl");
@@ -36,6 +43,7 @@ impl std::error::Error for GpuError {}
 /// Manages wgpu device/queue, GPU buffers, and compute pipelines for
 /// LIF neuron updates and optional SpMV (synapse propagation).
 #[allow(dead_code)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub struct GpuBackend {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -78,7 +86,7 @@ pub struct GpuBackend {
     active_model: GpuModel,
 
     // ── Staging buffers for readback ──
-    staging_buf: wgpu::Buffer,         // LIF readback (spiked + state)
+    staging_buf: wgpu::Buffer, // LIF readback (spiked + state)
     staging_spiked_offset: u64,
     staging_state_offset: u64,
     staging_size: u64,
@@ -123,7 +131,9 @@ impl GpuBackend {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             })
         };
@@ -140,7 +150,9 @@ impl GpuBackend {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             })
         };
@@ -196,20 +208,102 @@ impl GpuBackend {
         // ── Layouts ──
 
         // LIF storage layout (group 0, 9 bindings)
-        let lif_storage_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("lif_storage_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 5, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 6, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 7, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 8, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-            ],
-        });
+        let lif_storage_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("lif_storage_layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
 
         // Uniform layout (group 1)
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -217,7 +311,11 @@ impl GpuBackend {
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
                 count: None,
             }],
         });
@@ -226,11 +324,56 @@ impl GpuBackend {
         let spmv_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("spmv_layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -238,8 +381,26 @@ impl GpuBackend {
         let convert_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("convert_layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -254,11 +415,12 @@ impl GpuBackend {
             bind_group_layouts: &[&spmv_layout],
             push_constant_ranges: &[],
         });
-        let convert_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("convert_pipeline_layout"),
-            bind_group_layouts: &[&convert_layout],
-            push_constant_ranges: &[],
-        });
+        let convert_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("convert_pipeline_layout"),
+                bind_group_layouts: &[&convert_layout],
+                push_constant_ranges: &[],
+            });
 
         // ── Shaders ──
         let lif_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -291,14 +453,15 @@ impl GpuBackend {
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
-        let izhikevich_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("izhikevich_pipeline"),
-            layout: Some(&lif_pipeline_layout),
-            module: &izhikevich_shader,
-            entry_point: "main",
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
+        let izhikevich_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("izhikevich_pipeline"),
+                layout: Some(&lif_pipeline_layout),
+                module: &izhikevich_shader,
+                entry_point: "main",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
         // HH pipeline uses 12 bindings (extra gate buffers) — requires separate layout.
         // For now we reuse the same layout but the shader will only be used with
         // additional buffer support added at runtime.
@@ -330,15 +493,42 @@ impl GpuBackend {
         // ── Bind groups ──
         let lif_bind_group = {
             let entries = [
-                wgpu::BindGroupEntry { binding: 0, resource: membrane_potential_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: recovery_variable_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: refractory_counter_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: last_spike_time_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: spike_count_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: input_current_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: params_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: is_output_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 8, resource: spiked_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: membrane_potential_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: recovery_variable_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: refractory_counter_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: last_spike_time_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: spike_count_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: input_current_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: is_output_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: spiked_buf.as_entire_binding(),
+                },
             ];
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("lif_bind_group"),
@@ -348,7 +538,10 @@ impl GpuBackend {
         };
 
         let uniform_bind_group = {
-            let entry = wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() };
+            let entry = wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            };
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("uniform_bind_group"),
                 layout: &uniform_layout,
@@ -358,11 +551,26 @@ impl GpuBackend {
 
         let spmv_bind_group = {
             let entries = [
-                wgpu::BindGroupEntry { binding: 0, resource: spiked_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: adjacency_ptr_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: adjacency_indices_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: synapse_weights_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: atomic_current_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: spiked_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: adjacency_ptr_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: adjacency_indices_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: synapse_weights_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: atomic_current_buf.as_entire_binding(),
+                },
             ];
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("spmv_bind_group"),
@@ -373,8 +581,14 @@ impl GpuBackend {
 
         let convert_bind_group = {
             let entries = [
-                wgpu::BindGroupEntry { binding: 0, resource: atomic_current_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: input_current_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: atomic_current_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: input_current_buf.as_entire_binding(),
+                },
             ];
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("convert_bind_group"),
@@ -384,21 +598,40 @@ impl GpuBackend {
         };
 
         Ok(GpuBackend {
-            device, queue,
+            device,
+            queue,
             num_neurons,
             num_workgroups_neurons: ((num_neurons as f32) / 64.0).ceil() as u32,
-            membrane_potential_buf, recovery_variable_buf,
-            refractory_counter_buf, last_spike_time_buf, spike_count_buf,
-            input_current_buf, params_buf, is_output_buf, spiked_buf,
-            adjacency_ptr_buf, adjacency_indices_buf, synapse_weights_buf,
+            membrane_potential_buf,
+            recovery_variable_buf,
+            refractory_counter_buf,
+            last_spike_time_buf,
+            spike_count_buf,
+            input_current_buf,
+            params_buf,
+            is_output_buf,
+            spiked_buf,
+            adjacency_ptr_buf,
+            adjacency_indices_buf,
+            synapse_weights_buf,
             atomic_current_buf,
             uniform_buf,
-            lif_bind_group, uniform_bind_group, spmv_bind_group, convert_bind_group,
-            lif_pipeline, izhikevich_pipeline, hh_pipeline,
-            spmv_pipeline, convert_pipeline,
+            lif_bind_group,
+            uniform_bind_group,
+            spmv_bind_group,
+            convert_bind_group,
+            lif_pipeline,
+            izhikevich_pipeline,
+            hh_pipeline,
+            spmv_pipeline,
+            convert_pipeline,
             active_model: GpuModel::Lif,
-            staging_buf, staging_spiked_offset, staging_state_offset, staging_size,
-            staging_current_buf, staging_current_size,
+            staging_buf,
+            staging_spiked_offset,
+            staging_state_offset,
+            staging_size,
+            staging_current_buf,
+            staging_current_size,
         })
     }
 
@@ -414,10 +647,22 @@ impl GpuBackend {
         params: &[[f32; 6]],
         is_output: &[u32],
     ) {
-        self.write_buf(&self.membrane_potential_buf, bytemuck::cast_slice(membrane_potential));
-        self.write_buf(&self.recovery_variable_buf, bytemuck::cast_slice(recovery_variable));
-        self.write_buf(&self.refractory_counter_buf, bytemuck::cast_slice(refractory_counter));
-        self.write_buf(&self.last_spike_time_buf, bytemuck::cast_slice(last_spike_time));
+        self.write_buf(
+            &self.membrane_potential_buf,
+            bytemuck::cast_slice(membrane_potential),
+        );
+        self.write_buf(
+            &self.recovery_variable_buf,
+            bytemuck::cast_slice(recovery_variable),
+        );
+        self.write_buf(
+            &self.refractory_counter_buf,
+            bytemuck::cast_slice(refractory_counter),
+        );
+        self.write_buf(
+            &self.last_spike_time_buf,
+            bytemuck::cast_slice(last_spike_time),
+        );
         self.write_buf(&self.spike_count_buf, bytemuck::cast_slice(spike_count));
         let params_flat: Vec<f32> = params.iter().flat_map(|p| p.iter().copied()).collect();
         self.write_buf(&self.params_buf, bytemuck::cast_slice(&params_flat));
@@ -431,8 +676,14 @@ impl GpuBackend {
         synapse_weights: &[f32],
     ) {
         self.write_buf(&self.adjacency_ptr_buf, bytemuck::cast_slice(adjacency_ptr));
-        self.write_buf(&self.adjacency_indices_buf, bytemuck::cast_slice(adjacency_indices));
-        self.write_buf(&self.synapse_weights_buf, bytemuck::cast_slice(synapse_weights));
+        self.write_buf(
+            &self.adjacency_indices_buf,
+            bytemuck::cast_slice(adjacency_indices),
+        );
+        self.write_buf(
+            &self.synapse_weights_buf,
+            bytemuck::cast_slice(synapse_weights),
+        );
     }
 
     pub fn upload_input_current(&mut self, input_current: &[f32]) {
@@ -457,11 +708,7 @@ impl GpuBackend {
 
     /// Run the neuron compute shader for the active model.
     /// Returns (spiked, membrane_potential, recovery_variable, refractory_counter, spike_count).
-    pub fn step_neurons(
-        &mut self,
-    ) -> (
-        Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>,
-    ) {
+    pub fn step_neurons(&mut self) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
         match self.active_model {
             GpuModel::Lif => self.dispatch_lif(),
             GpuModel::Izhikevich => self.dispatch_izhikevich(),
@@ -490,10 +737,9 @@ impl GpuBackend {
         let n = num_neurons;
         let n_bytes = (n as u64) * 4;
 
-        let mut encoder = device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("neuron_encoder"),
-            });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("neuron_encoder"),
+        });
 
         {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -507,52 +753,95 @@ impl GpuBackend {
         }
 
         encoder.copy_buffer_to_buffer(spiked_buf, 0, staging_buf, staging_spiked_offset, n_bytes);
-        encoder.copy_buffer_to_buffer(membrane_potential_buf, 0, staging_buf, staging_state_offset, n_bytes);
-        encoder.copy_buffer_to_buffer(recovery_variable_buf, 0, staging_buf, staging_state_offset + n_bytes, n_bytes);
-        encoder.copy_buffer_to_buffer(refractory_counter_buf, 0, staging_buf, staging_state_offset + n_bytes * 2, n_bytes);
-        encoder.copy_buffer_to_buffer(spike_count_buf, 0, staging_buf, staging_state_offset + n_bytes * 3, n_bytes);
+        encoder.copy_buffer_to_buffer(
+            membrane_potential_buf,
+            0,
+            staging_buf,
+            staging_state_offset,
+            n_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            recovery_variable_buf,
+            0,
+            staging_buf,
+            staging_state_offset + n_bytes,
+            n_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            refractory_counter_buf,
+            0,
+            staging_buf,
+            staging_state_offset + n_bytes * 2,
+            n_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            spike_count_buf,
+            0,
+            staging_buf,
+            staging_state_offset + n_bytes * 3,
+            n_bytes,
+        );
 
         queue.submit(Some(encoder.finish()));
-        Self::map_readback_impl(device, staging_buf, staging_size, staging_spiked_offset, staging_state_offset, n)
-    }
-
-    fn dispatch_lif(
-        &mut self,
-    ) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
-        Self::dispatch_pipeline(
-            &self.device, &self.queue, &self.lif_pipeline,
-            &self.lif_bind_group, &self.uniform_bind_group,
-            &self.spiked_buf, &self.membrane_potential_buf,
-            &self.recovery_variable_buf, &self.refractory_counter_buf,
-            &self.spike_count_buf, &self.staging_buf,
-            self.staging_size,
-            self.staging_spiked_offset, self.staging_state_offset,
-            self.num_workgroups_neurons, self.num_neurons,
+        Self::map_readback_impl(
+            device,
+            staging_buf,
+            staging_size,
+            staging_spiked_offset,
+            staging_state_offset,
+            n,
         )
     }
 
-    fn dispatch_izhikevich(
-        &mut self,
-    ) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
+    fn dispatch_lif(&mut self) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
         Self::dispatch_pipeline(
-            &self.device, &self.queue, &self.izhikevich_pipeline,
-            &self.lif_bind_group, &self.uniform_bind_group,
-            &self.spiked_buf, &self.membrane_potential_buf,
-            &self.recovery_variable_buf, &self.refractory_counter_buf,
-            &self.spike_count_buf, &self.staging_buf,
+            &self.device,
+            &self.queue,
+            &self.lif_pipeline,
+            &self.lif_bind_group,
+            &self.uniform_bind_group,
+            &self.spiked_buf,
+            &self.membrane_potential_buf,
+            &self.recovery_variable_buf,
+            &self.refractory_counter_buf,
+            &self.spike_count_buf,
+            &self.staging_buf,
             self.staging_size,
-            self.staging_spiked_offset, self.staging_state_offset,
-            self.num_workgroups_neurons, self.num_neurons,
+            self.staging_spiked_offset,
+            self.staging_state_offset,
+            self.num_workgroups_neurons,
+            self.num_neurons,
         )
     }
 
-    fn dispatch_hh(
-        &mut self,
-    ) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
+    fn dispatch_izhikevich(&mut self) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
+        Self::dispatch_pipeline(
+            &self.device,
+            &self.queue,
+            &self.izhikevich_pipeline,
+            &self.lif_bind_group,
+            &self.uniform_bind_group,
+            &self.spiked_buf,
+            &self.membrane_potential_buf,
+            &self.recovery_variable_buf,
+            &self.refractory_counter_buf,
+            &self.spike_count_buf,
+            &self.staging_buf,
+            self.staging_size,
+            self.staging_spiked_offset,
+            self.staging_state_offset,
+            self.num_workgroups_neurons,
+            self.num_neurons,
+        )
+    }
+
+    fn dispatch_hh(&mut self) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
         // HH GPU shader requires gate buffers (m, h, n) that are not yet allocated.
         // This is a known limitation — HH on GPU requires additional storage buffers
         // and a dedicated pipeline layout with 12+ bindings.
-        panic!("Hodgkin-Huxley GPU backend not yet implemented. Use LIF or Izhikevich models with --features gpu, or run on CPU.");
+        panic!(
+            "Hodgkin-Huxley GPU backend not yet implemented. Use LIF or Izhikevich models with --features gpu, or run on CPU."
+        );
 
         // When implementing: add hh_m/hh_h/hh_n buffers to GpuBackend,
         // create a dedicated HH pipeline layout (needs 3 extra bindings),
@@ -560,11 +849,7 @@ impl GpuBackend {
     }
 
     /// Run the LIF compute shader (backward-compatible alias).
-    pub fn step_lif(
-        &mut self,
-    ) -> (
-        Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>,
-    ) {
+    pub fn step_lif(&mut self) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
         let n = self.num_neurons;
         let n_bytes = (n as u64) * 4;
 
@@ -586,11 +871,41 @@ impl GpuBackend {
         }
 
         // Copy results to staging
-        encoder.copy_buffer_to_buffer(&self.spiked_buf, 0, &self.staging_buf, self.staging_spiked_offset, n_bytes);
-        encoder.copy_buffer_to_buffer(&self.membrane_potential_buf, 0, &self.staging_buf, self.staging_state_offset, n_bytes);
-        encoder.copy_buffer_to_buffer(&self.recovery_variable_buf, 0, &self.staging_buf, self.staging_state_offset + n_bytes, n_bytes);
-        encoder.copy_buffer_to_buffer(&self.refractory_counter_buf, 0, &self.staging_buf, self.staging_state_offset + n_bytes * 2, n_bytes);
-        encoder.copy_buffer_to_buffer(&self.spike_count_buf, 0, &self.staging_buf, self.staging_state_offset + n_bytes * 3, n_bytes);
+        encoder.copy_buffer_to_buffer(
+            &self.spiked_buf,
+            0,
+            &self.staging_buf,
+            self.staging_spiked_offset,
+            n_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            &self.membrane_potential_buf,
+            0,
+            &self.staging_buf,
+            self.staging_state_offset,
+            n_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            &self.recovery_variable_buf,
+            0,
+            &self.staging_buf,
+            self.staging_state_offset + n_bytes,
+            n_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            &self.refractory_counter_buf,
+            0,
+            &self.staging_buf,
+            self.staging_state_offset + n_bytes * 2,
+            n_bytes,
+        );
+        encoder.copy_buffer_to_buffer(
+            &self.spike_count_buf,
+            0,
+            &self.staging_buf,
+            self.staging_state_offset + n_bytes * 3,
+            n_bytes,
+        );
 
         self.queue.submit(Some(encoder.finish()));
         self.map_readback(n)
@@ -649,7 +964,9 @@ impl GpuBackend {
         // Map and read
         let slice = self.staging_current_buf.slice(..self.staging_current_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
         self.device.poll(wgpu::Maintain::Wait);
 
         if rx.recv().ok() != Some(Ok(())) {
@@ -667,8 +984,12 @@ impl GpuBackend {
 
     fn map_readback(&self, n: usize) -> (Vec<u32>, Vec<f32>, Vec<f32>, Vec<i32>, Vec<u32>) {
         Self::map_readback_impl(
-            &self.device, &self.staging_buf, self.staging_size,
-            self.staging_spiked_offset, self.staging_state_offset, n,
+            &self.device,
+            &self.staging_buf,
+            self.staging_size,
+            self.staging_spiked_offset,
+            self.staging_state_offset,
+            n,
         )
     }
 
@@ -683,13 +1004,18 @@ impl GpuBackend {
         let n_bytes = (n as u64) * 4;
         let slice = staging_buf.slice(..staging_size);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
         device.poll(wgpu::Maintain::Wait);
 
         if rx.recv().ok() != Some(Ok(())) {
             return (
-                vec![0u32; n], vec![0.0; n], vec![0.0; n],
-                vec![0i32; n], vec![0u32; n],
+                vec![0u32; n],
+                vec![0.0; n],
+                vec![0.0; n],
+                vec![0i32; n],
+                vec![0u32; n],
             );
         }
 
@@ -698,9 +1024,12 @@ impl GpuBackend {
         let moff = staging_state_offset as usize;
         let spiked: Vec<u32> = bytemuck::cast_slice(&data[soff..moff]).to_vec();
         let mem_pot: Vec<f32> = bytemuck::cast_slice(&data[moff..][..n_bytes as usize]).to_vec();
-        let rec_var: Vec<f32> = bytemuck::cast_slice(&data[moff + n_bytes as usize..][..n_bytes as usize]).to_vec();
-        let refr_ctr: Vec<i32> = bytemuck::cast_slice(&data[moff + n_bytes as usize * 2..][..n_bytes as usize]).to_vec();
-        let spike_ct: Vec<u32> = bytemuck::cast_slice(&data[moff + n_bytes as usize * 3..][..n_bytes as usize]).to_vec();
+        let rec_var: Vec<f32> =
+            bytemuck::cast_slice(&data[moff + n_bytes as usize..][..n_bytes as usize]).to_vec();
+        let refr_ctr: Vec<i32> =
+            bytemuck::cast_slice(&data[moff + n_bytes as usize * 2..][..n_bytes as usize]).to_vec();
+        let spike_ct: Vec<u32> =
+            bytemuck::cast_slice(&data[moff + n_bytes as usize * 3..][..n_bytes as usize]).to_vec();
         drop(data);
         staging_buf.unmap();
         (spiked, mem_pot, rec_var, refr_ctr, spike_ct)

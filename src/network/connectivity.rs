@@ -18,10 +18,13 @@ impl ConnectivityPattern {
     pub fn connect(&self, network: &mut Network, rng: &mut impl Rng) {
         match self {
             Self::ErdosRenyi { p } => Self::connect_erdos_renyi(network, *p, rng),
-            Self::WattsStrogatz { k, beta } => Self::connect_watts_strogatz(network, *k, *beta, rng),
-            Self::DistanceBased { sigma, max_distance } => {
-                Self::connect_distance_based(network, *sigma, *max_distance, rng)
+            Self::WattsStrogatz { k, beta } => {
+                Self::connect_watts_strogatz(network, *k, *beta, rng)
             }
+            Self::DistanceBased {
+                sigma,
+                max_distance,
+            } => Self::connect_distance_based(network, *sigma, *max_distance, rng),
         }
         network.finalize();
     }
@@ -35,7 +38,12 @@ impl ConnectivityPattern {
                 }
                 if rng.random::<f64>() < p {
                     let syn_type = Self::synapse_type(network, i);
-                    network.add_synapse(SynapseState::new(i, j, rng.random::<f64>() * 2.0, syn_type));
+                    network.add_synapse(SynapseState::new(
+                        i,
+                        j,
+                        rng.random::<f64>() * 2.0,
+                        syn_type,
+                    ));
                 }
             }
         }
@@ -61,9 +69,13 @@ impl ConnectivityPattern {
         }
     }
 
-    fn connect_distance_based(network: &mut Network, sigma: f64, max_dist: f64, rng: &mut impl Rng) {
+    fn connect_distance_based(
+        network: &mut Network,
+        sigma: f64,
+        max_dist: f64,
+        rng: &mut impl Rng,
+    ) {
         let n = network.neuron_count();
-        let _max_sq = max_dist * max_dist;
         for i in 0..n {
             for j in 0..n {
                 if i == j {

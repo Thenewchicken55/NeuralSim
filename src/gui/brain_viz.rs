@@ -1,5 +1,5 @@
-use eframe::egui::{Color32, Pos2, Rect, Vec2, Painter, Stroke, StrokeKind, FontId, Align2, Ui};
 use crate::network::Network;
+use eframe::egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Ui, Vec2};
 use std::time::Instant;
 
 #[derive(Clone, Debug)]
@@ -35,6 +35,12 @@ pub struct BrainVisualization {
     pub brain_offset: Vec2,
     pub last_update: Instant,
     pub activity_decay: f64,
+}
+
+impl Default for BrainVisualization {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BrainVisualization {
@@ -100,7 +106,11 @@ impl BrainVisualization {
                 color: Color32::from_rgb(255, 150, 50),
                 neuron_count: 0,
                 activity: 0.0,
-                connections: vec!["Hippocampus".to_string(), "Amygdala".to_string(), "Parietal Lobe".to_string()],
+                connections: vec![
+                    "Hippocampus".to_string(),
+                    "Amygdala".to_string(),
+                    "Parietal Lobe".to_string(),
+                ],
                 is_active: false,
             },
             BrainRegion {
@@ -144,7 +154,11 @@ impl BrainVisualization {
                 color: Color32::from_rgb(200, 150, 100),
                 neuron_count: 0,
                 activity: 0.0,
-                connections: vec!["Frontal Lobe".to_string(), "Temporal Lobe".to_string(), "Amygdala".to_string()],
+                connections: vec![
+                    "Frontal Lobe".to_string(),
+                    "Temporal Lobe".to_string(),
+                    "Amygdala".to_string(),
+                ],
                 is_active: false,
             },
             BrainRegion {
@@ -155,7 +169,11 @@ impl BrainVisualization {
                 color: Color32::from_rgb(255, 100, 150),
                 neuron_count: 0,
                 activity: 0.0,
-                connections: vec!["Hippocampus".to_string(), "Frontal Lobe".to_string(), "Temporal Lobe".to_string()],
+                connections: vec![
+                    "Hippocampus".to_string(),
+                    "Frontal Lobe".to_string(),
+                    "Temporal Lobe".to_string(),
+                ],
                 is_active: false,
             },
             BrainRegion {
@@ -264,7 +282,8 @@ impl BrainVisualization {
                 } else {
                     0.0
                 };
-                region.activity = region.activity * self.activity_decay + instant_activity * (1.0 - self.activity_decay);
+                region.activity = region.activity * self.activity_decay
+                    + instant_activity * (1.0 - self.activity_decay);
                 region.is_active = instant_activity > 0.05;
             } else {
                 region.activity *= self.activity_decay;
@@ -275,8 +294,12 @@ impl BrainVisualization {
         // Update pathway activity based on connected region pairs
         for pathway in &mut self.pathways {
             if let (Some(from), Some(to)) = (
-                self.regions.iter().position(|r| r.name == pathway.from_region),
-                self.regions.iter().position(|r| r.name == pathway.to_region),
+                self.regions
+                    .iter()
+                    .position(|r| r.name == pathway.from_region),
+                self.regions
+                    .iter()
+                    .position(|r| r.name == pathway.to_region),
             ) {
                 let avg_activity = (self.regions[from].activity + self.regions[to].activity) * 0.5;
                 pathway.activity = pathway.activity * 0.9 + avg_activity * 0.1;
@@ -287,7 +310,11 @@ impl BrainVisualization {
     }
 
     /// Rebuild the region list from the current network structure
-    fn rebuild_from_network(&mut self, network: &Network, region_counts: &[(String, usize, usize)]) {
+    fn rebuild_from_network(
+        &mut self,
+        network: &Network,
+        region_counts: &[(String, usize, usize)],
+    ) {
         let colors = [
             Color32::from_rgb(100, 150, 255),
             Color32::from_rgb(150, 100, 255),
@@ -302,20 +329,27 @@ impl BrainVisualization {
             Color32::from_rgb(180, 180, 180),
         ];
 
-        self.regions = region_counts.iter().enumerate().map(|(i, (name, _count, _spikes))| {
-            let angle = i as f64 * std::f64::consts::TAU / region_counts.len().max(1) as f64;
-            BrainRegion {
-                name: name.clone(),
-                description: format!("Region: {}", name),
-                center: Pos2::new(0.5 + 0.28 * angle.cos() as f32, 0.5 + 0.25 * angle.sin() as f32),
-                radius: 0.12,
-                color: colors[i % colors.len()],
-                neuron_count: 0,
-                activity: 0.0,
-                connections: Vec::new(),
-                is_active: false,
-            }
-        }).collect();
+        self.regions = region_counts
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _count, _spikes))| {
+                let angle = i as f64 * std::f64::consts::TAU / region_counts.len().max(1) as f64;
+                BrainRegion {
+                    name: name.clone(),
+                    description: format!("Region: {}", name),
+                    center: Pos2::new(
+                        0.5 + 0.28 * angle.cos() as f32,
+                        0.5 + 0.25 * angle.sin() as f32,
+                    ),
+                    radius: 0.12,
+                    color: colors[i % colors.len()],
+                    neuron_count: 0,
+                    activity: 0.0,
+                    connections: Vec::new(),
+                    is_active: false,
+                }
+            })
+            .collect();
 
         // Build pathways from network connectivity
         self.pathways = Vec::new();
@@ -346,7 +380,7 @@ impl BrainVisualization {
             if region.name == region_name {
                 region.activity = (region.activity + strength).min(1.0);
                 region.is_active = true;
-                
+
                 // Activate connected pathways
                 for pathway in &mut self.pathways {
                     if pathway.from_region == region_name || pathway.to_region == region_name {
@@ -375,7 +409,7 @@ impl BrainVisualization {
         painter.rect_stroke(
             brain_rect,
             20.0,
-            Stroke::new(2.0, Color32::from_rgb(100, 100, 120)),
+            Stroke::new(2.0_f32, Color32::from_rgb(100, 100, 120)),
             StrokeKind::Inside,
         );
 
@@ -404,10 +438,11 @@ impl BrainVisualization {
         index: usize,
         _network: &Network,
     ) {
-        let region_center = center + Vec2::new(
-            (region.center.x - 0.5) * scale * 2.0,
-            (region.center.y - 0.5) * scale * 2.0,
-        );
+        let region_center = center
+            + Vec2::new(
+                (region.center.x - 0.5) * scale * 2.0,
+                (region.center.y - 0.5) * scale * 2.0,
+            );
         let region_radius = region.radius * scale;
 
         // Region background with activity-based color intensity
@@ -419,11 +454,7 @@ impl BrainVisualization {
         );
 
         // Draw region circle
-        painter.circle_filled(
-            region_center,
-            region_radius,
-            activity_color,
-        );
+        painter.circle_filled(region_center, region_radius, activity_color);
 
         // Draw region border
         let border_color = if region.is_active {
@@ -434,7 +465,7 @@ impl BrainVisualization {
         painter.circle_stroke(
             region_center,
             region_radius,
-            Stroke::new(2.0, border_color),
+            Stroke::new(2.0_f32, border_color),
         );
 
         // Draw activity indicator (pulsing effect when active)
@@ -449,7 +480,7 @@ impl BrainVisualization {
             painter.circle_stroke(
                 region_center,
                 pulse_radius,
-                Stroke::new(1.0, pulse_color),
+                Stroke::new(1.0_f32, pulse_color),
             );
         }
 
@@ -466,26 +497,22 @@ impl BrainVisualization {
         }
     }
 
-    fn render_pathways(
-        &self,
-        painter: &Painter,
-        center: Pos2,
-        scale: f32,
-        _network: &Network,
-    ) {
+    fn render_pathways(&self, painter: &Painter, center: Pos2, scale: f32, _network: &Network) {
         for pathway in &self.pathways {
             if let (Some(from_region), Some(to_region)) = (
                 self.regions.iter().find(|r| r.name == pathway.from_region),
                 self.regions.iter().find(|r| r.name == pathway.to_region),
             ) {
-                let from_center = center + Vec2::new(
-                    (from_region.center.x - 0.5) * scale * 2.0,
-                    (from_region.center.y - 0.5) * scale * 2.0,
-                );
-                let to_center = center + Vec2::new(
-                    (to_region.center.x - 0.5) * scale * 2.0,
-                    (to_region.center.y - 0.5) * scale * 2.0,
-                );
+                let from_center = center
+                    + Vec2::new(
+                        (from_region.center.x - 0.5) * scale * 2.0,
+                        (from_region.center.y - 0.5) * scale * 2.0,
+                    );
+                let to_center = center
+                    + Vec2::new(
+                        (to_region.center.x - 0.5) * scale * 2.0,
+                        (to_region.center.y - 0.5) * scale * 2.0,
+                    );
 
                 let color = if pathway.is_inhibitory {
                     Color32::from_rgba_unmultiplied(255, 100, 100, (pathway.activity * 200.0) as u8)
@@ -494,38 +521,32 @@ impl BrainVisualization {
                 };
 
                 let stroke_width = (pathway.strength * 3.0) as f32;
-                painter.line_segment(
-                    [from_center, to_center],
-                    Stroke::new(stroke_width, color),
-                );
+                painter.line_segment([from_center, to_center], Stroke::new(stroke_width, color));
 
                 // Draw arrow head for direction
                 let direction = (to_center - from_center).normalized();
                 let arrow_size = 8.0;
                 let arrow_tip = to_center - direction * from_region.radius * scale;
-                let arrow_left = arrow_tip + Vec2::new(-direction.y, direction.x) * arrow_size * 0.5;
-                let arrow_right = arrow_tip + Vec2::new(direction.y, -direction.x) * arrow_size * 0.5;
-                
-                painter.line_segment(
-                    [arrow_left, arrow_tip],
-                    Stroke::new(2.0, color),
-                );
-                painter.line_segment(
-                    [arrow_right, arrow_tip],
-                    Stroke::new(2.0, color),
-                );
+                let arrow_left =
+                    arrow_tip + Vec2::new(-direction.y, direction.x) * arrow_size * 0.5;
+                let arrow_right =
+                    arrow_tip + Vec2::new(direction.y, -direction.x) * arrow_size * 0.5;
+
+                painter.line_segment([arrow_left, arrow_tip], Stroke::new(2.0_f32, color));
+                painter.line_segment([arrow_right, arrow_tip], Stroke::new(2.0_f32, color));
             }
         }
     }
 
     fn render_labels(&self, painter: &Painter, center: Pos2, scale: f32) {
         for region in &self.regions {
-            let region_center = center + Vec2::new(
-                (region.center.x - 0.5) * scale * 2.0,
-                (region.center.y - 0.5) * scale * 2.0,
-            );
+            let region_center = center
+                + Vec2::new(
+                    (region.center.x - 0.5) * scale * 2.0,
+                    (region.center.y - 0.5) * scale * 2.0,
+                );
             let label_offset = Vec2::new(0.0, -region.radius * scale - 10.0);
-            
+
             painter.text(
                 region_center + label_offset,
                 Align2::CENTER_BOTTOM,
@@ -541,10 +562,11 @@ impl BrainVisualization {
         let scale = rect.width().min(rect.height()) * 0.4 * self.brain_scale;
 
         for (i, region) in self.regions.iter().enumerate() {
-            let region_center = center + Vec2::new(
-                (region.center.x - 0.5) * scale * 2.0,
-                (region.center.y - 0.5) * scale * 2.0,
-            );
+            let region_center = center
+                + Vec2::new(
+                    (region.center.x - 0.5) * scale * 2.0,
+                    (region.center.y - 0.5) * scale * 2.0,
+                );
             let region_radius = region.radius * scale;
 
             let distance = (click_pos - region_center).length();
@@ -571,7 +593,7 @@ impl BrainVisualization {
                 ui.label(format!("Neurons: {}", region.neuron_count));
                 ui.label(format!("Activity: {:.1}%", region.activity * 100.0));
                 ui.label(format!("Connections: {}", region.connections.len()));
-                
+
                 if !region.connections.is_empty() {
                     ui.label("Connected to:");
                     for conn in &region.connections {

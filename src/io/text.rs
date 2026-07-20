@@ -50,7 +50,12 @@ impl TextEncoder {
 
     /// Encode text into a list of (neuron_id, spike_time_ms) pairs.
     /// Each character is rate-coded: token -> neuron population fires at `firing_rate` Hz.
-    pub fn encode(&self, text: &str, start_time: f64, duration_per_token: f64) -> Vec<(usize, f64)> {
+    pub fn encode(
+        &self,
+        text: &str,
+        start_time: f64,
+        duration_per_token: f64,
+    ) -> Vec<(usize, f64)> {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let mut spikes = Vec::new();
 
@@ -111,8 +116,13 @@ impl TextDecoder {
 
     /// Decode output spikes over a time window into text.
     /// Uses winner-take-all per character population.
-    pub fn decode(&self, output_spikes: &[(usize, f64)], start_time: f64,
-                  end_time: f64, window_duration: f64) -> String {
+    pub fn decode(
+        &self,
+        output_spikes: &[(usize, f64)],
+        start_time: f64,
+        end_time: f64,
+        window_duration: f64,
+    ) -> String {
         let mut output = String::new();
 
         // Count spikes per neuron in each time window
@@ -122,10 +132,12 @@ impl TextDecoder {
             let mut char_votes: HashMap<char, usize> = HashMap::new();
 
             for &(neuron, spike_time) in output_spikes {
-                if spike_time >= t && spike_time < window_end
-                    && let Some(&c) = self.neuron_to_char.get(&neuron) {
-                        *char_votes.entry(c).or_insert(0) += 1;
-                    }
+                if spike_time >= t
+                    && spike_time < window_end
+                    && let Some(&c) = self.neuron_to_char.get(&neuron)
+                {
+                    *char_votes.entry(c).or_insert(0) += 1;
+                }
             }
 
             // Winner-take-all: most active character wins
@@ -140,9 +152,14 @@ impl TextDecoder {
     }
 
     /// Decode with confidence threshold: only output if votes exceed threshold.
-    pub fn decode_with_threshold(&self, output_spikes: &[(usize, f64)],
-                                  start_time: f64, end_time: f64,
-                                  window_duration: f64, threshold: usize) -> String {
+    pub fn decode_with_threshold(
+        &self,
+        output_spikes: &[(usize, f64)],
+        start_time: f64,
+        end_time: f64,
+        window_duration: f64,
+        threshold: usize,
+    ) -> String {
         let mut output = String::new();
         let mut t = start_time;
 
@@ -151,16 +168,19 @@ impl TextDecoder {
             let mut char_votes: HashMap<char, usize> = HashMap::new();
 
             for &(neuron, spike_time) in output_spikes {
-                if spike_time >= t && spike_time < window_end
-                    && let Some(&c) = self.neuron_to_char.get(&neuron) {
-                        *char_votes.entry(c).or_insert(0) += 1;
-                    }
+                if spike_time >= t
+                    && spike_time < window_end
+                    && let Some(&c) = self.neuron_to_char.get(&neuron)
+                {
+                    *char_votes.entry(c).or_insert(0) += 1;
+                }
             }
 
             if let Some((&best_char, &count)) = char_votes.iter().max_by_key(|&(_, count)| count)
-                && count >= threshold {
-                    output.push(best_char);
-                }
+                && count >= threshold
+            {
+                output.push(best_char);
+            }
 
             t = window_end;
         }
@@ -196,14 +216,15 @@ impl BrainRepl {
     /// 2. Simulate for the duration of the encoded input
     /// 3. (User calls step/driver externally)
     /// 4. Decode output spikes to text
-    pub fn encode_input(&self, text: &str, network: &mut Network, start_time: f64) -> Vec<(usize, f64)> {
-        let _duration = (text.len() as f64) * (1000.0 / self.tokens_per_second);
-        let spikes = self.encoder.encode(text, start_time, 1000.0 / self.tokens_per_second);
-
-        // Find input neurons
-        let _input_neurons: Vec<usize> = (0..network.neuron_count())
-            .filter(|&i| network.neuron_region.get(i) == Some(&0)) // assume region 0 is input
-            .collect();
+    pub fn encode_input(
+        &self,
+        text: &str,
+        network: &mut Network,
+        start_time: f64,
+    ) -> Vec<(usize, f64)> {
+        let spikes = self
+            .encoder
+            .encode(text, start_time, 1000.0 / self.tokens_per_second);
 
         // Inject currents for input spikes
         for &(neuron, _time) in &spikes {
@@ -219,7 +240,9 @@ impl BrainRepl {
     pub fn decode_output(&self, spike_buffer: &[(usize, f64)], sim_time: f64) -> String {
         let duration = sim_time.max(1000.0);
         self.decoder.decode_with_threshold(
-            spike_buffer, 0.0, duration,
+            spike_buffer,
+            0.0,
+            duration,
             1000.0 / self.tokens_per_second,
             self.response_threshold,
         )
@@ -243,7 +266,10 @@ mod tests {
     #[test]
     fn test_text_encoder_vocab() {
         let encoder = TextEncoder::default(260);
-        assert!(encoder.vocab_size() > 10, "Should have a reasonable vocabulary");
+        assert!(
+            encoder.vocab_size() > 10,
+            "Should have a reasonable vocabulary"
+        );
     }
 
     #[test]

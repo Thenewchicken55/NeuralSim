@@ -1,8 +1,7 @@
-use crate::neuron::{NeuronModelParams, NeuronType};
-use crate::synapse::{SynapseState, SynapseType};
-use crate::synapse::plasticity::StdpRule;
 use crate::network::Network;
 use crate::network::connectivity::ConnectivityPattern;
+use crate::neuron::{NeuronModelParams, NeuronType};
+use crate::synapse::{SynapseState, SynapseType};
 use rand::Rng;
 use rand::SeedableRng;
 
@@ -22,7 +21,6 @@ pub struct BrainBuilder {
     regions: Vec<RegionSpec>,
     connections: Vec<RegionConnection>,
     enable_plasticity: bool,
-    _stdp_rule: Option<StdpRule>,
     name: String,
 }
 
@@ -62,7 +60,6 @@ impl BrainBuilder {
             regions: Vec::new(),
             connections: Vec::new(),
             enable_plasticity: true,
-            _stdp_rule: Some(StdpRule::default()),
             name: "Brain".into(),
         }
     }
@@ -78,7 +75,13 @@ impl BrainBuilder {
     }
 
     /// Add a single-region population.
-    pub fn add_region(mut self, name: &str, count: usize, exc_ratio: f64, params: NeuronModelParams) -> Self {
+    pub fn add_region(
+        mut self,
+        name: &str,
+        count: usize,
+        exc_ratio: f64,
+        params: NeuronModelParams,
+    ) -> Self {
         let idx = self.regions.len();
         self.regions.push(RegionSpec {
             name: name.into(),
@@ -108,14 +111,16 @@ impl BrainBuilder {
             ConnectivityPattern::ErdosRenyi { p: 0.04 },
         ];
 
-        let layers: Vec<LayerSpec> = fractions.iter().enumerate().map(|(i, &frac)| {
-            LayerSpec {
+        let layers: Vec<LayerSpec> = fractions
+            .iter()
+            .enumerate()
+            .map(|(i, &frac)| LayerSpec {
                 name: format!("{}_{}", name, layer_names[i]),
                 fraction: frac,
                 excitatory_ratio: exc_ratios[i],
                 _connectivity: layer_connectivity[i].clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         self.regions.push(RegionSpec {
             name: name.into(),
@@ -146,11 +151,23 @@ impl BrainBuilder {
     }
 
     /// Connect two regions with given probability.
-    pub fn connect_regions(mut self, from: &str, to: &str, probability: f64,
-                           weight_scale: f64, syn_type: Option<SynapseType>) -> Self {
-        let from_idx = self.regions.iter().position(|r| r.name == from)
+    pub fn connect_regions(
+        mut self,
+        from: &str,
+        to: &str,
+        probability: f64,
+        weight_scale: f64,
+        syn_type: Option<SynapseType>,
+    ) -> Self {
+        let from_idx = self
+            .regions
+            .iter()
+            .position(|r| r.name == from)
             .expect("from region not found");
-        let to_idx = self.regions.iter().position(|r| r.name == to)
+        let to_idx = self
+            .regions
+            .iter()
+            .position(|r| r.name == to)
             .expect("to region not found");
         self.connections.push(RegionConnection {
             from_region: from_idx,
@@ -165,17 +182,33 @@ impl BrainBuilder {
     }
 
     /// Connect specific layers between two regions.
-    pub fn connect_layers(mut self, from_region: &str, from_layer: &str,
-                          to_region: &str, to_layer: &str,
-                          probability: f64, weight_scale: f64) -> Self {
-        let from_idx = self.regions.iter().position(|r| r.name == from_region)
+    pub fn connect_layers(
+        mut self,
+        from_region: &str,
+        from_layer: &str,
+        to_region: &str,
+        to_layer: &str,
+        probability: f64,
+        weight_scale: f64,
+    ) -> Self {
+        let from_idx = self
+            .regions
+            .iter()
+            .position(|r| r.name == from_region)
             .expect("from region not found");
-        let to_idx = self.regions.iter().position(|r| r.name == to_region)
+        let to_idx = self
+            .regions
+            .iter()
+            .position(|r| r.name == to_region)
             .expect("to region not found");
 
-        let from_layer_idx = self.regions[from_idx].layers.as_ref()
+        let from_layer_idx = self.regions[from_idx]
+            .layers
+            .as_ref()
             .and_then(|l| l.iter().position(|ls| ls.name.contains(from_layer)));
-        let to_layer_idx = self.regions[to_idx].layers.as_ref()
+        let to_layer_idx = self.regions[to_idx]
+            .layers
+            .as_ref()
             .and_then(|l| l.iter().position(|ls| ls.name.contains(to_layer)));
 
         self.connections.push(RegionConnection {
@@ -204,10 +237,6 @@ impl BrainBuilder {
         for (rid, region) in self.regions.iter().enumerate() {
             match &region.layers {
                 Some(layers) => {
-                    let total_layers: usize = layers.iter().map(|l| {
-                        (region.neuron_count as f64 * l.fraction) as usize
-                    }).sum();
-                    let _remaining = region.neuron_count.saturating_sub(total_layers);
                     let mut layer_offsets = Vec::new();
                     let mut current = offset;
 
@@ -228,17 +257,27 @@ impl BrainBuilder {
                                 }
                                 net.neurons.model_params[i] = region.model_params;
                                 // Set Izhikevich params based on type
-                                if let NeuronModelParams::Izhikevich { .. } = &net.neurons.model_params[i] {
+                                if let NeuronModelParams::Izhikevich { .. } =
+                                    &net.neurons.model_params[i]
+                                {
                                     match net.neurons.neuron_type[i] {
                                         NeuronType::Excitatory => {
-                                            net.neurons.model_params[i] = NeuronModelParams::Izhikevich {
-                                                a: 0.02, b: 0.2, c: -65.0, d: 8.0,
-                                            };
+                                            net.neurons.model_params[i] =
+                                                NeuronModelParams::Izhikevich {
+                                                    a: 0.02,
+                                                    b: 0.2,
+                                                    c: -65.0,
+                                                    d: 8.0,
+                                                };
                                         }
                                         NeuronType::Inhibitory => {
-                                            net.neurons.model_params[i] = NeuronModelParams::Izhikevich {
-                                                a: 0.02, b: 0.25, c: -65.0, d: 2.0,
-                                            };
+                                            net.neurons.model_params[i] =
+                                                NeuronModelParams::Izhikevich {
+                                                    a: 0.02,
+                                                    b: 0.25,
+                                                    c: -65.0,
+                                                    d: 2.0,
+                                                };
                                         }
                                     }
                                 }
@@ -257,70 +296,93 @@ impl BrainBuilder {
                     // Layer-specific within-column connectivity
                     // L4 -> L2/3 (sensory input ascends)
                     if let Some(&(l4_offset, l4_count)) = layer_offsets.get(1)
-                        && let Some(&(l23_offset, l23_count)) = layer_offsets.first() {
-                            for si in l4_offset..l4_offset + l4_count {
-                                for tj in l23_offset..l23_offset + l23_count {
-                                    if rng.random::<f64>() < 0.30 {
-                                        net.add_synapse(Self::make_syn(si, tj, &mut rng));
-                                    }
+                        && let Some(&(l23_offset, l23_count)) = layer_offsets.first()
+                    {
+                        for si in l4_offset..l4_offset + l4_count {
+                            for tj in l23_offset..l23_offset + l23_count {
+                                if rng.random::<f64>() < 0.30 {
+                                    net.add_synapse(Self::make_syn(si, tj, &mut rng));
                                 }
                             }
                         }
+                    }
                     // L2/3 -> L5
                     if let Some(&(l23_offset, l23_count)) = layer_offsets.first()
-                        && let Some(&(l5_offset, l5_count)) = layer_offsets.get(2) {
-                            for si in l23_offset..l23_offset + l23_count {
-                                for tj in l5_offset..l5_offset + l5_count {
-                                    if rng.random::<f64>() < 0.20 {
-                                        net.add_synapse(Self::make_syn(si, tj, &mut rng));
-                                    }
+                        && let Some(&(l5_offset, l5_count)) = layer_offsets.get(2)
+                    {
+                        for si in l23_offset..l23_offset + l23_count {
+                            for tj in l5_offset..l5_offset + l5_count {
+                                if rng.random::<f64>() < 0.20 {
+                                    net.add_synapse(Self::make_syn(si, tj, &mut rng));
                                 }
                             }
                         }
+                    }
                     // L5 -> L6
                     if let Some(&(l5_offset, l5_count)) = layer_offsets.get(2)
-                        && let Some(&(l6_offset, l6_count)) = layer_offsets.get(5) {
-                            for si in l5_offset..l5_offset + l5_count {
-                                for tj in l6_offset..l6_offset + l6_count {
-                                    if rng.random::<f64>() < 0.40 {
-                                        net.add_synapse(Self::make_syn(si, tj, &mut rng));
-                                    }
+                        && let Some(&(l6_offset, l6_count)) = layer_offsets.get(5)
+                    {
+                        for si in l5_offset..l5_offset + l5_count {
+                            for tj in l6_offset..l6_offset + l6_count {
+                                if rng.random::<f64>() < 0.40 {
+                                    net.add_synapse(Self::make_syn(si, tj, &mut rng));
                                 }
                             }
                         }
+                    }
                     // L4_IN (inhibitory) -> L4 (local inhibition)
                     if let Some(&(l4in_offset, l4in_count)) = layer_offsets.get(3)
-                        && let Some(&(l4_offset, l4_count)) = layer_offsets.get(1) {
-                            for si in l4in_offset..l4in_offset + l4in_count {
-                                for tj in l4_offset..l4_offset + l4_count {
-                                    if rng.random::<f64>() < 0.25 {
-                                        let mut syn = SynapseState::new(si, tj, -rng.random::<f64>() * 2.0, SynapseType::GABA);
-                                        if self.enable_plasticity { syn = syn.with_plasticity(); }
-                                        net.add_synapse(syn);
+                        && let Some(&(l4_offset, l4_count)) = layer_offsets.get(1)
+                    {
+                        for si in l4in_offset..l4in_offset + l4in_count {
+                            for tj in l4_offset..l4_offset + l4_count {
+                                if rng.random::<f64>() < 0.25 {
+                                    let mut syn = SynapseState::new(
+                                        si,
+                                        tj,
+                                        -rng.random::<f64>() * 2.0,
+                                        SynapseType::GABA,
+                                    );
+                                    if self.enable_plasticity {
+                                        syn = syn.with_plasticity();
                                     }
+                                    net.add_synapse(syn);
                                 }
                             }
                         }
+                    }
                     // L5_IN (inhibitory) -> L5
                     if let Some(&(l5in_offset, l5in_count)) = layer_offsets.get(4)
-                        && let Some(&(l5_offset, l5_count)) = layer_offsets.get(2) {
-                            for si in l5in_offset..l5in_offset + l5in_count {
-                                for tj in l5_offset..l5_offset + l5_count {
-                                    if rng.random::<f64>() < 0.25 {
-                                        let mut syn = SynapseState::new(si, tj, -rng.random::<f64>() * 2.0, SynapseType::GABA);
-                                        if self.enable_plasticity { syn = syn.with_plasticity(); }
-                                        net.add_synapse(syn);
+                        && let Some(&(l5_offset, l5_count)) = layer_offsets.get(2)
+                    {
+                        for si in l5in_offset..l5in_offset + l5in_count {
+                            for tj in l5_offset..l5_offset + l5_count {
+                                if rng.random::<f64>() < 0.25 {
+                                    let mut syn = SynapseState::new(
+                                        si,
+                                        tj,
+                                        -rng.random::<f64>() * 2.0,
+                                        SynapseType::GABA,
+                                    );
+                                    if self.enable_plasticity {
+                                        syn = syn.with_plasticity();
                                     }
+                                    net.add_synapse(syn);
                                 }
                             }
                         }
+                    }
                 }
                 None => {
                     for i in offset..offset + region.neuron_count {
                         if i < net.neuron_count() {
                             net.neuron_region[i] = rid;
                             let is_exc = rng.random::<f64>() < region.excitatory_ratio;
-                            net.neurons.neuron_type[i] = if is_exc { NeuronType::Excitatory } else { NeuronType::Inhibitory };
+                            net.neurons.neuron_type[i] = if is_exc {
+                                NeuronType::Excitatory
+                            } else {
+                                NeuronType::Inhibitory
+                            };
                             net.neurons.model_params[i] = region.model_params;
                             if region.is_input {
                                 net.neurons.input_current[i] = 5.0;
@@ -338,9 +400,13 @@ impl BrainBuilder {
         // Within-region random connectivity
         for rid in 0..self.regions.len() {
             for i in 0..net.neuron_count() {
-                if net.neuron_region[i] != rid { continue; }
+                if net.neuron_region[i] != rid {
+                    continue;
+                }
                 for j in 0..net.neuron_count() {
-                    if i == j || net.neuron_region[j] != rid { continue; }
+                    if i == j || net.neuron_region[j] != rid {
+                        continue;
+                    }
                     if rng.random::<f64>() < 0.02 {
                         net.add_synapse(Self::make_syn(i, j, &mut rng));
                     }
@@ -352,17 +418,26 @@ impl BrainBuilder {
         for conn in &self.connections {
             let from_neurons: Vec<usize> = (0..net.neuron_count())
                 .filter(|&i| {
-                    if net.neuron_region[i] != conn.from_region { return false; }
+                    if net.neuron_region[i] != conn.from_region {
+                        return false;
+                    }
                     match conn.from_layer {
                         Some(layer_idx) => {
                             // Check if neuron falls in the correct layer offset range
-                            let region_start = self.regions[..conn.from_region].iter().map(|r| r.neuron_count).sum::<usize>();
+                            let region_start = self.regions[..conn.from_region]
+                                .iter()
+                                .map(|r| r.neuron_count)
+                                .sum::<usize>();
                             let layers = self.regions[conn.from_region].layers.as_ref().unwrap();
                             let mut layer_start = region_start;
                             for layer in layers.iter().take(layer_idx) {
-                                layer_start += (layer.fraction * self.regions[conn.from_region].neuron_count as f64) as usize;
+                                layer_start += (layer.fraction
+                                    * self.regions[conn.from_region].neuron_count as f64)
+                                    as usize;
                             }
-                            let layer_count = (layers[layer_idx].fraction * self.regions[conn.from_region].neuron_count as f64) as usize;
+                            let layer_count = (layers[layer_idx].fraction
+                                * self.regions[conn.from_region].neuron_count as f64)
+                                as usize;
                             i >= layer_start && i < layer_start + layer_count
                         }
                         None => true,
@@ -371,16 +446,25 @@ impl BrainBuilder {
                 .collect();
             let to_neurons: Vec<usize> = (0..net.neuron_count())
                 .filter(|&i| {
-                    if net.neuron_region[i] != conn.to_region { return false; }
+                    if net.neuron_region[i] != conn.to_region {
+                        return false;
+                    }
                     match conn.to_layer {
                         Some(layer_idx) => {
-                            let region_start = self.regions[..conn.to_region].iter().map(|r| r.neuron_count).sum::<usize>();
+                            let region_start = self.regions[..conn.to_region]
+                                .iter()
+                                .map(|r| r.neuron_count)
+                                .sum::<usize>();
                             let layers = self.regions[conn.to_region].layers.as_ref().unwrap();
                             let mut layer_start = region_start;
                             for layer in layers.iter().take(layer_idx) {
-                                layer_start += (layer.fraction * self.regions[conn.to_region].neuron_count as f64) as usize;
+                                layer_start += (layer.fraction
+                                    * self.regions[conn.to_region].neuron_count as f64)
+                                    as usize;
                             }
-                            let layer_count = (layers[layer_idx].fraction * self.regions[conn.to_region].neuron_count as f64) as usize;
+                            let layer_count = (layers[layer_idx].fraction
+                                * self.regions[conn.to_region].neuron_count as f64)
+                                as usize;
                             i >= layer_start && i < layer_start + layer_count
                         }
                         None => true,
@@ -394,10 +478,19 @@ impl BrainBuilder {
                         let st = conn.syn_type.unwrap_or_else(|| {
                             if net.neurons.neuron_type[si] == NeuronType::Excitatory {
                                 SynapseType::AMPA
-                            } else { SynapseType::GABA }
+                            } else {
+                                SynapseType::GABA
+                            }
                         });
-                        let mut syn = SynapseState::new(si, tj, conn.weight_scale * (rng.random::<f64>() * 0.5 + 0.75), st);
-                        if self.enable_plasticity { syn = syn.with_plasticity(); }
+                        let mut syn = SynapseState::new(
+                            si,
+                            tj,
+                            conn.weight_scale * (rng.random::<f64>() * 0.5 + 0.75),
+                            st,
+                        );
+                        if self.enable_plasticity {
+                            syn = syn.with_plasticity();
+                        }
                         net.add_synapse(syn);
                     }
                 }
@@ -447,9 +540,7 @@ mod tests {
 
     #[test]
     fn test_cortical_column_builder() {
-        let net = BrainBuilder::new()
-            .add_cortical_column("V1", 1000)
-            .build();
+        let net = BrainBuilder::new().add_cortical_column("V1", 1000).build();
         assert_eq!(net.neuron_count(), 1000);
         // Should have layer-specific within-column connections
         assert!(net.synapse_count() > 100, "should create layer connections");
