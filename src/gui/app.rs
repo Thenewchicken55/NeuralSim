@@ -54,6 +54,8 @@ pub struct NeuralSimApp {
     input_text: String,
     output_text: String,
     show_text_io: bool,
+    // Help panel
+    show_help: bool,
 }
 
 struct MovingAverage {
@@ -133,6 +135,7 @@ impl NeuralSimApp {
             input_text: String::new(),
             output_text: String::new(),
             show_text_io: false,
+            show_help: false,
         }
     }
 
@@ -295,11 +298,11 @@ impl eframe::App for NeuralSimApp {
         // ── Top panel ──
         egui::Panel::top("controls").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("🧠 NeuralSim Brain Simulator");
+                ui.heading("🧠 NeuralSim");
                 ui.separator();
                 // Scheduler controls
                 if self.sim_running {
-                    if ui.button("⏹ Stop").clicked() {
+                    if ui.button("⏹ Stop").on_hover_text("Pause the simulation").clicked() {
                         if let Some(ref sched) = self.scheduler {
                             sched.stop();
                         }
@@ -307,7 +310,7 @@ impl eframe::App for NeuralSimApp {
                     }
                     ui.label("🟢 Running");
                 } else {
-                    if ui.button("▶ Start").clicked() {
+                    if ui.button("▶ Start").on_hover_text("Start the simulation").clicked() {
                         if let Some(ref sched) = self.scheduler {
                             sched.start();
                         }
@@ -316,7 +319,7 @@ impl eframe::App for NeuralSimApp {
                     ui.label("⏸ Paused");
                 }
                 ui.separator();
-                if ui.button("Reset").clicked() {
+                if ui.button("Reset").on_hover_text("Reset simulation to initial state").clicked() {
                     if self.sim_running {
                         if let Some(ref sched) = self.scheduler {
                             sched.stop();
@@ -334,15 +337,6 @@ impl eframe::App for NeuralSimApp {
                     self.weight_mean_history.clear();
                     self.neuron_flash.fill(0);
                 }
-                if ui.button("Burst").clicked() {
-                    let mut eng = self.engine.lock();
-                    let n = eng.network.read().neuron_count();
-                    let mut rng = rand::rngs::StdRng::from_os_rng();
-                    for _ in 0..(n / 10).max(1) {
-                        let idx = rng.random_range(0..n);
-                        eng.stimulate(idx, 50.0);
-                    }
-                }
                 ui.separator();
                 ui.label(format!("FPS: {:.0}", self.fps_tracker.average()));
                 ui.label(format!("Neurons: {}", self.neuron_count));
@@ -350,12 +344,9 @@ impl eframe::App for NeuralSimApp {
                     ui.colored_label(egui::Color32::YELLOW, format!("⚡ OUTPUT! x{}", new_output));
                 }
                 ui.separator();
-                ui.checkbox(&mut self.show_brain_viz, "Brain View");
-                ui.checkbox(&mut self.show_raster, "Raster");
-                ui.checkbox(&mut self.show_lfp, "LFP");
-                ui.checkbox(&mut self.show_weights, "Weights");
-                ui.checkbox(&mut self.show_text_io, "Text I/O");
-                ui.checkbox(&mut self.use_conductance, "Cond");
+                if ui.button("❓ Help").on_hover_text("Show help and information panel").clicked() {
+                    self.show_help = !self.show_help;
+                }
             });
         });
 
@@ -416,65 +407,127 @@ impl eframe::App for NeuralSimApp {
                         });
                     }
 
-                    // Controls
-                    ui.group(|ui| {
-                        ui.label("Controls");
-                        ui.separator();
-                        ui.add(
-                            egui::Slider::new(&mut self.stimulation_strength, 0.0..=100.0)
-                                .text("Stim Strength"),
-                        );
-                        ui.add(
-                            egui::Slider::new(&mut self.noise_amplitude, 0.0..=30.0)
-                                .text("Noise Level"),
-                        );
+                    // Controls - grouped into collapsible sections
+                    egui::CollapsingHeader::new("⚙️ Stimulation Controls")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.group(|ui| {
+                                ui.label("Stimulation Strength").on_hover_text("Strength of electrical stimulation applied to neurons");
+                                ui.add(
+                                    egui::Slider::new(&mut self.stimulation_strength, 0.0..=100.0),
+                                );
+                                ui.label("Background Noise").on_hover_text("Random background activity level");
+                                ui.add(
+                                    egui::Slider::new(&mut self.noise_amplitude, 0.0..=30.0),
+                                );
 
-                        if ui.button("Stimulate Random 10").clicked() {
-                            let mut eng = self.engine.lock();
-                            let n = eng.network.read().neuron_count();
-                            let mut rng = rand::rngs::StdRng::from_os_rng();
-                            for _ in 0..10 {
-                                let idx = rng.random_range(0..n);
-                                eng.stimulate(idx, self.stimulation_strength);
-                            }
-                        }
+                                if ui.button("Stimulate Random 10").on_hover_text("Stimulate 10 random neurons").clicked() {
+                                    let mut eng = self.engine.lock();
+                                    let n = eng.network.read().neuron_count();
+                                    let mut rng = rand::rngs::StdRng::from_os_rng();
+                                    for _ in 0..10 {
+                                        let idx = rng.random_range(0..n);
+                                        eng.stimulate(idx, self.stimulation_strength);
+                                    }
+                                }
 
-                        if ui.button("Stimulate Visual Cortex").clicked() {
-                            self.brain_viz.stimulate_region("Visual Cortex", 0.8);
-                        }
+                                if ui.button("Burst Stimulation").on_hover_text("Stimulate 10% of neurons at once").clicked() {
+                                    let mut eng = self.engine.lock();
+                                    let n = eng.network.read().neuron_count();
+                                    let mut rng = rand::rngs::StdRng::from_os_rng();
+                                    for _ in 0..(n / 10).max(1) {
+                                        let idx = rng.random_range(0..n);
+                                        eng.stimulate(idx, 50.0);
+                                    }
+                                }
+                            });
+                        });
 
-                        if ui.button("Stimulate Motor Cortex").clicked() {
-                            self.brain_viz.stimulate_region("Motor Cortex", 0.8);
-                        }
-                    });
+                    egui::CollapsingHeader::new("🧠 Brain Region Presets")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.group(|ui| {
+                                if ui.button("👁️ Visual Processing").on_hover_text("Activate visual processing pathways").clicked() {
+                                    self.brain_viz.stimulate_region("Visual Cortex", 0.9);
+                                    self.brain_viz.stimulate_region("Occipital Lobe", 0.7);
+                                }
+
+                                if ui.button("🎵 Auditory Processing").on_hover_text("Activate auditory processing pathways").clicked() {
+                                    self.brain_viz.stimulate_region("Auditory Cortex", 0.9);
+                                    self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
+                                }
+
+                                if ui.button("🏃 Motor Control").on_hover_text("Activate motor control pathways").clicked() {
+                                    self.brain_viz.stimulate_region("Motor Cortex", 0.9);
+                                    self.brain_viz.stimulate_region("Cerebellum", 0.7);
+                                }
+
+                                if ui.button("💾 Memory Formation").on_hover_text("Activate memory formation pathways").clicked() {
+                                    self.brain_viz.stimulate_region("Hippocampus", 0.9);
+                                    self.brain_viz.stimulate_region("Frontal Lobe", 0.7);
+                                }
+
+                                if ui.button("😰 Emotional Response").on_hover_text("Activate emotional processing pathways").clicked() {
+                                    self.brain_viz.stimulate_region("Amygdala", 0.9);
+                                    self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
+                                }
+                            });
+                        });
+
+                    egui::CollapsingHeader::new("👁️ View Options")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.group(|ui| {
+                                ui.checkbox(&mut self.show_brain_viz, "Brain Visualization")
+                                    .on_hover_text("Show interactive brain region map");
+                                ui.checkbox(&mut self.show_raster, "Spike Raster Plot")
+                                    .on_hover_text("Show spike rate over time");
+                                ui.checkbox(&mut self.show_lfp, "Local Field Potential (LFP)")
+                                    .on_hover_text("Show aggregated neural activity");
+                                ui.checkbox(&mut self.show_weights, "Synaptic Weights")
+                                    .on_hover_text("Show mean synaptic weight over time");
+                                ui.checkbox(&mut self.show_text_io, "Text I/O")
+                                    .on_hover_text("Show text encoding/decoding panel");
+                                ui.checkbox(&mut self.use_conductance, "Conductance Model")
+                                    .on_hover_text("Use conductance-based neuron model");
+                            });
+                        });
 
                     // Stats
-                    ui.group(|ui| {
-                        ui.label("Statistics");
-                        ui.separator();
-                        ui.label(format!("Time: {:.1} ms", stats.sim_time_ms));
-                        ui.label(format!("Total spikes: {}", stats.total_spikes));
-                        ui.label(format!("Output spikes: {}", stats.output_spikes));
-                        ui.label(format!("Spikes/frame: {}", self.last_result.spike_count));
-                        let rate = {
-                            let eng = self.engine.lock();
-                            let n = eng.network.read().neuron_count() as f64;
-                            if n > 0.0 && stats.sim_time_ms > 0.0 {
-                                (stats.total_spikes as f64 / n) / (stats.sim_time_ms / 1000.0)
-                            } else {
-                                0.0
-                            }
-                        };
-                        ui.label(format!("Avg rate: {:.1} Hz", rate));
-                        ui.label(format!("Mean FR: {:.1} Hz", stats.mean_firing_rate));
-                        ui.label(format!("Synch: {:.3}", stats.synchrony_index));
-                        ui.label(format!("LFP: {:.2}", lfp));
-                        ui.label(format!(
-                            "Weight μ={:.3} σ={:.3}",
-                            stats.weight_mean, stats.weight_std
-                        ));
-                        ui.label(format!("Updates: {}", stats.weight_updates));
-                    });
+                    egui::CollapsingHeader::new("📊 Simulation Statistics")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.group(|ui| {
+                                ui.label(format!("Simulation Time: {:.1} ms", stats.sim_time_ms));
+                                ui.label(format!("Total Spikes: {}", stats.total_spikes))
+                                    .on_hover_text("Total number of neuron firings");
+                                ui.label(format!("Output Spikes: {}", stats.output_spikes))
+                                    .on_hover_text("Spikes from output neurons");
+                                ui.label(format!("Spikes/Frame: {}", self.last_result.spike_count));
+                                let rate = {
+                                    let eng = self.engine.lock();
+                                    let n = eng.network.read().neuron_count() as f64;
+                                    if n > 0.0 && stats.sim_time_ms > 0.0 {
+                                        (stats.total_spikes as f64 / n) / (stats.sim_time_ms / 1000.0)
+                                    } else {
+                                        0.0
+                                    }
+                                };
+                                ui.label(format!("Average Rate: {:.1} Hz", rate))
+                                    .on_hover_text("Average firing rate per neuron");
+                                ui.label(format!("Mean Firing Rate: {:.1} Hz", stats.mean_firing_rate));
+                                ui.label(format!("Synchrony Index: {:.3}", stats.synchrony_index))
+                                    .on_hover_text("How synchronized the network activity is (0-1)");
+                                ui.label(format!("Local Field Potential: {:.2}", lfp))
+                                    .on_hover_text("Aggregated electrical activity");
+                                ui.label(format!(
+                                    "Synaptic Weight μ={:.3} σ={:.3}",
+                                    stats.weight_mean, stats.weight_std
+                                ))
+                                    .on_hover_text("Mean and standard deviation of synaptic weights");
+                                ui.label(format!("Weight Updates: {}", stats.weight_updates));
+                            });
+                        });
 
                     // Region stats
                     if self.show_region_stats {
@@ -539,6 +592,42 @@ impl eframe::App for NeuralSimApp {
 
                 // ── RIGHT COLUMN: Neural Activity + Info ──
                 cols[1].vertical(|ui| {
+                    // Help panel
+                    if self.show_help {
+                        egui::CollapsingHeader::new("❓ Help & Information")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                ui.group(|ui| {
+                                    ui.heading("Welcome to NeuralSim!");
+                                    ui.separator();
+                                    ui.label("This is a biologically-realistic spiking neural network simulator.");
+                                    ui.add_space(10.0);
+                                    
+                                    ui.label("Key Concepts:");
+                                    ui.label("• **Spikes**: Neurons fire electrical signals when stimulated");
+                                    ui.label("• **Synapses**: Connections between neurons that transmit signals");
+                                    ui.label("• **Weights**: Strength of synaptic connections (learning)");
+                                    ui.label("• **LFP**: Local Field Potential - aggregated neural activity");
+                                    ui.label("• **Synchrony**: How coordinated neuron firing is");
+                                    ui.add_space(10.0);
+                                    
+                                    ui.label("How to Use:");
+                                    ui.label("• Click ▶ Start to begin simulation");
+                                    ui.label("• Click brain regions to stimulate them");
+                                    ui.label("• Use preset buttons to activate brain functions");
+                                    ui.label("• Adjust stimulation strength and noise levels");
+                                    ui.label("• Toggle view options to see different visualizations");
+                                    ui.add_space(10.0);
+                                    
+                                    ui.label("Brain Regions:");
+                                    ui.label("• Visual Cortex: Processes visual information");
+                                    ui.label("• Motor Cortex: Controls movement");
+                                    ui.label("• Hippocampus: Memory formation");
+                                    ui.label("• Amygdala: Emotional processing");
+                                });
+                            });
+                    }
+
                     ui.group(|ui| {
                         ui.label("🔬 Neural Activity Monitor");
                         ui.separator();
@@ -547,11 +636,13 @@ impl eframe::App for NeuralSimApp {
                         ui.label(format!(
                             "Active Neurons: {}",
                             self.last_result.spiking_neurons.len()
-                        ));
+                        ))
+                            .on_hover_text("Number of neurons firing this frame");
                         ui.label(format!(
                             "Output Activity: {}",
                             self.last_result.output_spiking_neurons.len()
-                        ));
+                        ))
+                            .on_hover_text("Number of output neurons firing this frame");
 
                         // Show neural pathway activity
                         ui.label("Active Pathways:");
@@ -578,23 +669,26 @@ impl eframe::App for NeuralSimApp {
                     ui.group(|ui| {
                         ui.label("🎯 Learning Progress");
                         ui.separator();
-                        ui.label(format!("Weight Updates: {}", stats.weight_updates));
+                        ui.label(format!("Weight Updates: {}", stats.weight_updates))
+                            .on_hover_text("Number of synaptic weight modifications");
                         ui.label(format!("Weight Mean: {:.3}", stats.weight_mean));
                         ui.label(format!("Weight Std: {:.3}", stats.weight_std));
 
                         // Show learning visualization
-                        let progress = (stats.weight_mean * 100.0).min(100.0) as f32;
+                        let progress = (stats.weight_mean.abs() * 100.0).min(100.0) as f32;
                         ui.add(
                             egui::ProgressBar::new(progress / 100.0)
                                 .text(format!("{:.1}%", progress)),
                         );
-                        ui.label("Learning Progress");
+                        ui.label("Synaptic Strength")
+                            .on_hover_text("Average synaptic connection strength");
                     });
 
                     ui.group(|ui| {
                         ui.label("📊 Network Performance");
                         ui.separator();
-                        ui.label(format!("Synchrony: {:.3}", stats.synchrony_index));
+                        ui.label(format!("Synchrony: {:.3}", stats.synchrony_index))
+                            .on_hover_text("Network coordination level (0=random, 1=fully synchronized)");
                         ui.label(format!("Firing Rate: {:.1} Hz", stats.mean_firing_rate));
 
                         // Show performance meter
@@ -604,37 +698,6 @@ impl eframe::App for NeuralSimApp {
                                 .text(format!("{:.1}%", performance)),
                         );
                         ui.label("Network Coordination");
-                    });
-
-                    // Interactive buttons for different brain functions
-                    ui.group(|ui| {
-                        ui.label("🧠 Brain Functions");
-                        ui.separator();
-
-                        if ui.button("👁️ Visual Processing").clicked() {
-                            self.brain_viz.stimulate_region("Visual Cortex", 0.9);
-                            self.brain_viz.stimulate_region("Occipital Lobe", 0.7);
-                        }
-
-                        if ui.button("🎵 Auditory Processing").clicked() {
-                            self.brain_viz.stimulate_region("Auditory Cortex", 0.9);
-                            self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
-                        }
-
-                        if ui.button("🏃 Motor Control").clicked() {
-                            self.brain_viz.stimulate_region("Motor Cortex", 0.9);
-                            self.brain_viz.stimulate_region("Cerebellum", 0.7);
-                        }
-
-                        if ui.button("💾 Memory Formation").clicked() {
-                            self.brain_viz.stimulate_region("Hippocampus", 0.9);
-                            self.brain_viz.stimulate_region("Frontal Lobe", 0.7);
-                        }
-
-                        if ui.button("😰 Emotional Response").clicked() {
-                            self.brain_viz.stimulate_region("Amygdala", 0.9);
-                            self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
-                        }
                     });
 
                     // Text I/O panel
