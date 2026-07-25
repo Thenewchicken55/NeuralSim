@@ -21,3 +21,4 @@ logs/
 
 # Environment
 .env
+.aider*

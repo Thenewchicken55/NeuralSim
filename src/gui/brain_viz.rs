@@ -597,7 +597,7 @@ impl BrainVisualization {
                 if !region.connections.is_empty() {
                     ui.label("Connected to:");
                     for conn in &region.connections {
-                        ui.label(format!("  • {}", conn));
+                        ui.label(format!("  - {}", conn));
                     }
                 }
             });

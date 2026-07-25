@@ -298,55 +298,91 @@ impl eframe::App for NeuralSimApp {
         // ── Top panel ──
         egui::Panel::top("controls").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("🧠 NeuralSim");
+                ui.vertical(|ui| {
+                    ui.heading("NeuralSim");
+                    ui.label("Spiking neural network simulator");
+                    ui.label("Press Start to run the simulation. Output spikes come from output neurons.");
+                });
+
                 ui.separator();
-                // Scheduler controls
-                if self.sim_running {
-                    if ui.button("⏹ Stop").on_hover_text("Pause the simulation").clicked() {
-                        if let Some(ref sched) = self.scheduler {
-                            sched.stop();
-                        }
-                        self.sim_running = false;
-                    }
-                    ui.label("🟢 Running");
-                } else {
-                    if ui.button("▶ Start").on_hover_text("Start the simulation").clicked() {
-                        if let Some(ref sched) = self.scheduler {
-                            sched.start();
-                        }
-                        self.sim_running = true;
-                    }
-                    ui.label("⏸ Paused");
-                }
-                ui.separator();
-                if ui.button("Reset").on_hover_text("Reset simulation to initial state").clicked() {
+
+                ui.horizontal(|ui| {
                     if self.sim_running {
-                        if let Some(ref sched) = self.scheduler {
-                            sched.stop();
+                        if ui
+                            .button("Stop")
+                            .on_hover_text("Pause the simulation")
+                            .clicked()
+                        {
+                            if let Some(ref sched) = self.scheduler {
+                                sched.stop();
+                            }
+                            self.sim_running = false;
                         }
-                        self.sim_running = false;
+                    } else {
+                        if ui
+                            .button("Start")
+                            .on_hover_text("Start the simulation")
+                            .clicked()
+                        {
+                            if let Some(ref sched) = self.scheduler {
+                                sched.start();
+                            }
+                            self.sim_running = true;
+                        }
                     }
-                    let mut eng = self.engine.lock();
-                    *eng = SimulationEngine::new(Network::new(self.neuron_count));
-                    self.last_spike_count = 0;
-                    self.last_output_count = 0;
-                    self.spike_history.clear();
-                    self.output_history.clear();
-                    self.lfp_history.clear();
-                    self.firing_rate_history.clear();
-                    self.weight_mean_history.clear();
-                    self.neuron_flash.fill(0);
-                }
+
+                    if ui
+                        .button("Reset")
+                        .on_hover_text("Reset the simulation to its initial state")
+                        .clicked()
+                    {
+                        if self.sim_running {
+                            if let Some(ref sched) = self.scheduler {
+                                sched.stop();
+                            }
+                            self.sim_running = false;
+                        }
+                        let mut eng = self.engine.lock();
+                        *eng = SimulationEngine::new(Network::new(self.neuron_count));
+                        self.last_spike_count = 0;
+                        self.last_output_count = 0;
+                        self.spike_history.clear();
+                        self.output_history.clear();
+                        self.lfp_history.clear();
+                        self.firing_rate_history.clear();
+                        self.weight_mean_history.clear();
+                        self.neuron_flash.fill(0);
+                    }
+
+                    if ui
+                        .button("Help")
+                        .on_hover_text("Toggle the help and information panel")
+                        .clicked()
+                    {
+                        self.show_help = !self.show_help;
+                    }
+                });
+
                 ui.separator();
-                ui.label(format!("FPS: {:.0}", self.fps_tracker.average()));
-                ui.label(format!("Neurons: {}", self.neuron_count));
-                if self.output_flash_counter > 0 {
-                    ui.colored_label(egui::Color32::YELLOW, format!("⚡ OUTPUT! x{}", new_output));
-                }
-                ui.separator();
-                if ui.button("❓ Help").on_hover_text("Show help and information panel").clicked() {
-                    self.show_help = !self.show_help;
-                }
+
+                ui.vertical(|ui| {
+                    ui.label(if self.sim_running {
+                        "Running"
+                    } else {
+                        "Paused"
+                    })
+                    .on_hover_text("Current engine state");
+                    ui.label(format!("FPS: {:.0}", self.fps_tracker.average()))
+                        .on_hover_text("Rendering frame rate");
+                    ui.label(format!("Neurons: {}", self.neuron_count))
+                        .on_hover_text("Total number of network neurons");
+                    if self.output_flash_counter > 0 {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            format!("Output burst x{}", new_output),
+                        );
+                    }
+                });
             });
         });
 
@@ -357,7 +393,9 @@ impl eframe::App for NeuralSimApp {
                 cols[0].vertical(|ui| {
                     if self.show_brain_viz {
                         ui.group(|ui| {
-                            ui.label("🧠 Brain Region Visualization");
+ui.label("Brain Region Visualization");
+                        ui.label("Click a region to stimulate it and observe activity.")
+                            .on_hover_text("Click a region to inject activity into that part of the network");
                             ui.separator();
 
                             let (response, painter) = ui.allocate_painter(
@@ -408,8 +446,8 @@ impl eframe::App for NeuralSimApp {
                     }
 
                     // Controls - grouped into collapsible sections
-                    egui::CollapsingHeader::new("⚙️ Stimulation Controls")
-                        .default_open(true)
+                    egui::CollapsingHeader::new("Stimulation Controls")
+                        .default_open(false)
                         .show(ui, |ui| {
                             ui.group(|ui| {
                                 ui.label("Stimulation Strength").on_hover_text("Strength of electrical stimulation applied to neurons");
@@ -443,38 +481,38 @@ impl eframe::App for NeuralSimApp {
                             });
                         });
 
-                    egui::CollapsingHeader::new("🧠 Brain Region Presets")
-                        .default_open(true)
+                    egui::CollapsingHeader::new("Brain Region Presets")
+                        .default_open(false)
                         .show(ui, |ui| {
                             ui.group(|ui| {
-                                if ui.button("👁️ Visual Processing").on_hover_text("Activate visual processing pathways").clicked() {
+                                if ui.button("Visual Processing").on_hover_text("Activate visual processing pathways").clicked() {
                                     self.brain_viz.stimulate_region("Visual Cortex", 0.9);
                                     self.brain_viz.stimulate_region("Occipital Lobe", 0.7);
                                 }
 
-                                if ui.button("🎵 Auditory Processing").on_hover_text("Activate auditory processing pathways").clicked() {
+                                if ui.button("Auditory Processing").on_hover_text("Activate auditory processing pathways").clicked() {
                                     self.brain_viz.stimulate_region("Auditory Cortex", 0.9);
                                     self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
                                 }
 
-                                if ui.button("🏃 Motor Control").on_hover_text("Activate motor control pathways").clicked() {
+                                if ui.button("Motor Control").on_hover_text("Activate motor control pathways").clicked() {
                                     self.brain_viz.stimulate_region("Motor Cortex", 0.9);
                                     self.brain_viz.stimulate_region("Cerebellum", 0.7);
                                 }
 
-                                if ui.button("💾 Memory Formation").on_hover_text("Activate memory formation pathways").clicked() {
+                                if ui.button("Memory Formation").on_hover_text("Activate memory formation pathways").clicked() {
                                     self.brain_viz.stimulate_region("Hippocampus", 0.9);
                                     self.brain_viz.stimulate_region("Frontal Lobe", 0.7);
                                 }
 
-                                if ui.button("😰 Emotional Response").on_hover_text("Activate emotional processing pathways").clicked() {
+                                if ui.button("Emotional Response").on_hover_text("Activate emotional processing pathways").clicked() {
                                     self.brain_viz.stimulate_region("Amygdala", 0.9);
                                     self.brain_viz.stimulate_region("Temporal Lobe", 0.7);
                                 }
                             });
                         });
 
-                    egui::CollapsingHeader::new("👁️ View Options")
+                    egui::CollapsingHeader::new("View Options")
                         .default_open(false)
                         .show(ui, |ui| {
                             ui.group(|ui| {
@@ -494,8 +532,8 @@ impl eframe::App for NeuralSimApp {
                         });
 
                     // Stats
-                    egui::CollapsingHeader::new("📊 Simulation Statistics")
-                        .default_open(true)
+                    egui::CollapsingHeader::new("Simulation Statistics")
+                        .default_open(false)
                         .show(ui, |ui| {
                             ui.group(|ui| {
                                 ui.label(format!("Simulation Time: {:.1} ms", stats.sim_time_ms));
@@ -521,7 +559,7 @@ impl eframe::App for NeuralSimApp {
                                 ui.label(format!("Local Field Potential: {:.2}", lfp))
                                     .on_hover_text("Aggregated electrical activity");
                                 ui.label(format!(
-                                    "Synaptic Weight μ={:.3} σ={:.3}",
+                                    "Synaptic Weight mean={:.3} std={:.3}",
                                     stats.weight_mean, stats.weight_std
                                 ))
                                     .on_hover_text("Mean and standard deviation of synaptic weights");
@@ -594,43 +632,53 @@ impl eframe::App for NeuralSimApp {
                 cols[1].vertical(|ui| {
                     // Help panel
                     if self.show_help {
-                        egui::CollapsingHeader::new("❓ Help & Information")
+                        egui::CollapsingHeader::new("Help & Information")
                             .default_open(true)
                             .show(ui, |ui| {
                                 ui.group(|ui| {
-                                    ui.heading("Welcome to NeuralSim!");
+                                    ui.heading("Welcome to NeuralSim");
                                     ui.separator();
                                     ui.label("This is a biologically-realistic spiking neural network simulator.");
                                     ui.add_space(10.0);
-                                    
+
                                     ui.label("Key Concepts:");
-                                    ui.label("• **Spikes**: Neurons fire electrical signals when stimulated");
-                                    ui.label("• **Synapses**: Connections between neurons that transmit signals");
-                                    ui.label("• **Weights**: Strength of synaptic connections (learning)");
-                                    ui.label("• **LFP**: Local Field Potential - aggregated neural activity");
-                                    ui.label("• **Synchrony**: How coordinated neuron firing is");
+                                    ui.label("- **Spikes**: Neurons fire electrical signals when stimulated");
+                                    ui.label("- **Synapses**: Connections between neurons that transmit signals");
+                                    ui.label("- **Weights**: Strength of synaptic connections (learning)");
+                                    ui.label("- **LFP**: Local Field Potential - aggregated neural activity");
+                                    ui.label("- **Synchrony**: How coordinated neuron firing is");
                                     ui.add_space(10.0);
-                                    
+
                                     ui.label("How to Use:");
-                                    ui.label("• Click ▶ Start to begin simulation");
-                                    ui.label("• Click brain regions to stimulate them");
-                                    ui.label("• Use preset buttons to activate brain functions");
-                                    ui.label("• Adjust stimulation strength and noise levels");
-                                    ui.label("• Toggle view options to see different visualizations");
+                                    ui.label("- Click Start to run the network and generate spikes.");
+                                    ui.label("- Click brain regions to inject activity into that region.");
+                                    ui.label("- Use preset buttons to activate functional region groups.");
+                                    ui.label("- Open Text I/O to inject text input and decode output neuron spikes.");
+                                    ui.label("- Watch Output Neurons in the Activity Monitor for decoded results.");
                                     ui.add_space(10.0);
-                                    
+
                                     ui.label("Brain Regions:");
-                                    ui.label("• Visual Cortex: Processes visual information");
-                                    ui.label("• Motor Cortex: Controls movement");
-                                    ui.label("• Hippocampus: Memory formation");
-                                    ui.label("• Amygdala: Emotional processing");
+                                    ui.label("- Visual Cortex: Processes visual information");
+                                    ui.label("- Motor Cortex: Controls movement");
+                                    ui.label("- Hippocampus: Memory formation");
+                                    ui.label("- Amygdala: Emotional processing");
                                 });
                             });
                     }
 
                     ui.group(|ui| {
-                        ui.label("🔬 Neural Activity Monitor");
+                        ui.label("Neural Activity Monitor");
                         ui.separator();
+
+                        let eng = self.engine.lock();
+                        let net = eng.network.read();
+                        let input_driven = net
+                            .neurons
+                            .input_current
+                            .iter()
+                            .filter(|&&current| current > 0.0)
+                            .count();
+                        let total_input_current: f64 = net.neurons.input_current.iter().sum();
 
                         // Show real-time neural activity
                         ui.label(format!(
@@ -639,10 +687,25 @@ impl eframe::App for NeuralSimApp {
                         ))
                             .on_hover_text("Number of neurons firing this frame");
                         ui.label(format!(
-                            "Output Activity: {}",
+                            "Output Neurons Active: {}",
                             self.last_result.output_spiking_neurons.len()
                         ))
                             .on_hover_text("Number of output neurons firing this frame");
+                        ui.label(format!(
+                            "Output Spikes this Frame: {}",
+                            self.last_result.output_spike_count
+                        ))
+                            .on_hover_text("Number of output neuron spikes generated this frame");
+                        ui.label(format!(
+                            "Input-Driven Neurons: {}",
+                            input_driven
+                        ))
+                            .on_hover_text("Number of neurons currently receiving input current");
+                        ui.label(format!(
+                            "Total Input Current: {:.1}",
+                            total_input_current
+                        ))
+                            .on_hover_text("Sum of input current across all neurons");
 
                         // Show neural pathway activity
                         ui.label("Active Pathways:");
@@ -656,7 +719,7 @@ impl eframe::App for NeuralSimApp {
                                 ui.colored_label(
                                     color,
                                     format!(
-                                        "{} → {}: {:.1}%",
+                                        "{} to {}: {:.1}%",
                                         pathway.from_region,
                                         pathway.to_region,
                                         pathway.activity * 100.0
@@ -667,7 +730,7 @@ impl eframe::App for NeuralSimApp {
                     });
 
                     ui.group(|ui| {
-                        ui.label("🎯 Learning Progress");
+                        ui.label("Learning Progress");
                         ui.separator();
                         ui.label(format!("Weight Updates: {}", stats.weight_updates))
                             .on_hover_text("Number of synaptic weight modifications");
@@ -685,7 +748,7 @@ impl eframe::App for NeuralSimApp {
                     });
 
                     ui.group(|ui| {
-                        ui.label("📊 Network Performance");
+                        ui.label("Network Performance");
                         ui.separator();
                         ui.label(format!("Synchrony: {:.3}", stats.synchrony_index))
                             .on_hover_text("Network coordination level (0=random, 1=fully synchronized)");
@@ -703,19 +766,24 @@ impl eframe::App for NeuralSimApp {
                     // Text I/O panel
                     if self.show_text_io {
                         ui.group(|ui| {
-                            ui.label("📝 Text I/O");
+                            ui.label("Text I/O");
                             ui.separator();
+                            ui.label("Encode text into network input, then decode output spikes from output neurons.");
+                            ui.add_space(4.0);
                             ui.horizontal(|ui| {
                                 ui.label("Input:");
                                 let resp = ui.add_sized(
-                                    egui::vec2(150.0, 20.0),
+                                    egui::vec2(250.0, 26.0),
                                     egui::TextEdit::singleline(&mut self.input_text)
-                                        .hint_text("Type here..."),
+                                        .hint_text("Enter text to inject")
+                                        .desired_width(200.0),
                                 );
-                                if resp.lost_focus()
-                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                if ui
+                                    .button("Inject")
+                                    .on_hover_text("Encode the input text and inject it into the network")
+                                    .clicked()
+                                    || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                                 {
-                                    // Encode and inject
                                     let text = self.input_text.clone();
                                     let mut eng = self.engine.lock();
                                     let sim_time = {
@@ -730,9 +798,14 @@ impl eframe::App for NeuralSimApp {
                                     }
                                 }
                             });
+                            ui.add_space(4.0);
                             ui.horizontal(|ui| {
                                 ui.label("Output:");
-                                if ui.button("Decode").clicked() {
+                                if ui
+                                    .button("Decode")
+                                    .on_hover_text("Decode spikes from output neurons into text")
+                                    .clicked()
+                                {
                                     let eng = self.engine.lock();
                                     let sim_time = eng.stats.read().sim_time_ms;
                                     let net = eng.network.read();
@@ -742,13 +815,17 @@ impl eframe::App for NeuralSimApp {
                                         })
                                         .map(|i| (i, net.time))
                                         .collect();
-                                    self.output_text = self.text_decoder.decode_with_threshold(
-                                        &output_spikes,
-                                        0.0,
-                                        sim_time,
-                                        50.0,
-                                        2,
-                                    );
+                                    if output_spikes.is_empty() {
+                                        self.output_text = "No output spikes detected yet".to_string();
+                                    } else {
+                                        self.output_text = self.text_decoder.decode_with_threshold(
+                                            &output_spikes,
+                                            0.0,
+                                            sim_time,
+                                            50.0,
+                                            2,
+                                        );
+                                    }
                                 }
                                 ui.label(&self.output_text);
                             });
